@@ -38,6 +38,8 @@ from scipy.signal import cheb1ord
 from pyfda.libs.pyfda_lib import fil_save, lin2unit
 from pyfda.libs.pyfda_qt_lib import qfilter_warning
 from .common import Common
+import logging
+logger = logging.getLogger(__name__)
 
 __version__ = "2.2"
 
@@ -177,6 +179,7 @@ critical passband frequency :math:`F_C` from passband / stopband specifications.
             return -1
         self._save(fil_dict, sig.cheby1(self.N, self.A_PB, self.F_PBC,
                             btype='low', analog=self.analog, output=self.FRMT))
+        logger.info(f"Designed filter with command sig.cheby1({self.N}, {self.A_PB}, {self.F_PBC}, btype='low', analog={self.analog}, output={self.FRMT})")
 
     def LPman(self, fil_dict):
         self._get_params(fil_dict)
@@ -184,6 +187,7 @@ critical passband frequency :math:`F_C` from passband / stopband specifications.
             return -1
         self._save(fil_dict, sig.cheby1(self.N, self.A_PB, self.F_C,
                             btype='low', analog=self.analog, output=self.FRMT))
+        logger.info(f"Designed filter with command sig.cheby1({self.N}, {self.A_PB}, {self.F_C}, btype='low', analog={self.analog}, output={self.FRMT})")
 
     # HP: F_SB < F_PB ---------------------------------------------------------
     def HPmin(self, fil_dict):
@@ -194,6 +198,7 @@ critical passband frequency :math:`F_C` from passband / stopband specifications.
             return -1
         self._save(fil_dict, sig.cheby1(self.N, self.A_PB, self.F_PBC,
                         btype='highpass', analog=self.analog, output=self.FRMT))
+        logger.info(f"Designed filter with command sig.cheby1({self.N}, {self.A_PB}, {self.F_PBC}, btype='highpass', analog={self.analog}, output={self.FRMT})")
 
     def HPman(self, fil_dict):
         self._get_params(fil_dict)
@@ -201,6 +206,7 @@ critical passband frequency :math:`F_C` from passband / stopband specifications.
             return -1
         self._save(fil_dict, sig.cheby1(self.N, self.A_PB, self.F_C,
                         btype='highpass', analog=self.analog, output=self.FRMT))
+        logger.info(f"Designed filter with command sig.cheby1({self.N}, {self.A_PB}, {self.F_C}, btype='highpass', analog={self.analog}, output={self.FRMT})")
 
     # For BP and BS, A_PB, F_PB and F_stop have two elements each:
 
@@ -213,6 +219,7 @@ critical passband frequency :math:`F_C` from passband / stopband specifications.
             return -1
         self._save(fil_dict, sig.cheby1(self.N, self.A_PB, self.F_PBC,
                         btype='bandpass', analog=self.analog, output=self.FRMT))
+        logger.info(f"Designed filter with command sig.cheby1({self.N}, {self.A_PB}, {self.F_PBC}, btype='bandpass', analog={self.analog}, output={self.FRMT})")
 
     def BPman(self, fil_dict):
         self._get_params(fil_dict)
@@ -220,6 +227,7 @@ critical passband frequency :math:`F_C` from passband / stopband specifications.
             return -1
         self._save(fil_dict, sig.cheby1(self.N, self.A_PB,[self.F_C,self.F_C2],
                         btype='bandpass', analog=self.analog, output=self.FRMT))
+        logger.info(f"Designed filter with command sig.cheby1({self.N}, {self.A_PB}, [{self.F_C}, {self.F_C2}], btype='bandpass', analog={self.analog}, output={self.FRMT})")
 
 
     # BS: F_SB[0] > F_PB[0], F_SB[1] < F_PB[1] --------------------------------
@@ -231,6 +239,7 @@ critical passband frequency :math:`F_C` from passband / stopband specifications.
             return -1
         self._save(fil_dict, sig.cheby1(self.N, self.A_PB, self.F_PBC,
                         btype='bandstop', analog=self.analog, output=self.FRMT))
+        logger.info(f"Designed filter with command sig.cheby1({self.N}, {self.A_PB}, {self.F_PBC}, btype='bandstop', analog={self.analog}, output={self.FRMT})")
 
     def BSman(self, fil_dict):
         self._get_params(fil_dict)
@@ -238,6 +247,7 @@ critical passband frequency :math:`F_C` from passband / stopband specifications.
             return -1
         self._save(fil_dict, sig.cheby1(self.N, self.A_PB, [self.F_C,self.F_C2],
                         btype='bandstop', analog=self.analog, output=self.FRMT))
+        logger.info(f"Designed filter with command sig.cheby1({self.N}, {self.A_PB}, [{self.F_C}, {self.F_C2}], btype='bandstop', analog={self.analog}, output={self.FRMT})")
 
 
 #------------------------------------------------------------------------------
