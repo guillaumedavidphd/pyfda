@@ -286,6 +286,7 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
                   sig.remez(self.N,[0, self.F_PB, self.F_SB, 0.5], [1, 0],
                         weight = [fil_dict['W_PB'],fil_dict['W_SB']], fs = 1,
                         grid_density = self.grid_density))
+        logger.info(f"Designed filter with command ")
 
     def LPmin(self, fil_dict):
         self._get_params(fil_dict)
@@ -297,6 +298,7 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
         fil_dict['W_SB'] = W[1]
         self._save(fil_dict, sig.remez(self.N, F, [1, 0], weight = W, fs = 1,
                         grid_density = self.grid_density))
+        logger.info(f"Designed filter with command sig.remez({self.N}, {F}, [1, 0], weight = {W}, fs=1, grid_density={self.grid_density})")
 
 
     def HPman(self, fil_dict):
@@ -308,11 +310,13 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
                   sig.remez(self.N,[0, self.F_SB, self.F_PB, 0.5], [0, 1],
                         weight = [fil_dict['W_SB'],fil_dict['W_PB']], fs = 1,
                         type = 'hilbert', grid_density = self.grid_density))
+            logger.info(f"Designed filter with command sig.remez({self.N}, [0, {self.F_SB}, {self.F_PB}, 0.5], [0, 1], weight=[{fil_dict['W_SB']}, {fil_dict['W_PB']}], fs=1, type='hilbert', grid_density={self.grid_density})")
         else: # odd order,
             self._save(fil_dict,
                   sig.remez(self.N,[0, self.F_SB, self.F_PB, 0.5], [0, 1],
                         weight = [fil_dict['W_SB'],fil_dict['W_PB']], fs = 1,
                         type = 'bandpass', grid_density = self.grid_density))
+            logger.info(f"Designed filter with command sig.remez({self.N}, [0, {self.F_SB}, {self.F_PB}, 0.5], [0, 1], weight=[{fil_dict['W_SB']}, {fil_dict['W_PB']}], fs=1, type='bandpass', grid_density={self.grid_density})")
 
     def HPmin(self, fil_dict):
         self._get_params(fil_dict)
@@ -326,9 +330,11 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
         if (self.N % 2 == 0): # even order
             self._save(fil_dict, sig.remez(self.N, F,[0, 1], weight = W, fs = 1,
                         type = 'hilbert', grid_density = self.grid_density))
+            logger.info(f"Designed filter with command sig.remez({self.N}, {F}, [0, 1], weight={W}, fs=1, type='hilbert', grid_density={self.grid_density})")
         else:
             self._save(fil_dict, sig.remez(self.N, F,[0, 1], weight = W, fs = 1,
                         type = 'bandpass', grid_density = self.grid_density))
+            logger.info(f"Designed filter with command sig.remez({self.N}, {F}, [0, 1], weight={W}, fs=1, type='bandpass', grid_density={self.grid_density})")
 
     # For BP and BS, F_PB and F_SB have two elements each
     def BPman(self, fil_dict):
@@ -340,6 +346,7 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
                 self.F_PB2, self.F_SB2, 0.5],[0, 1, 0],
                 weight = [fil_dict['W_SB'],fil_dict['W_PB'], fil_dict['W_SB2']],
                 fs = 1, grid_density = self.grid_density))
+        logger.info(f"Designed filter with command sig.remez({self.N}, [0, {self.F_SB}, {self.F_PB}, {self.F_PB2}, {self.F_SB2}, 0.5], [0, 1, 0], weight=[{fil_dict['W_SB']}, {fil_dict['W_PB']}, {fil_dict['W_SB2']}], fs=1, grid_density={self.grid_density})")
 
     def BPmin(self, fil_dict):
         self._get_params(fil_dict)
@@ -353,6 +360,7 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
         fil_dict['W_SB2'] = W[2]
         self._save(fil_dict, sig.remez(self.N,F,[0, 1, 0], weight = W, fs = 1,
                                       grid_density = self.grid_density))
+        logger.info(f"Designed filter with command sig.remez({self.N}, {F}, [0, 1, 0], weight={W}, fs=1, grid_density={self.grid_density})")
 
     def BSman(self, fil_dict):
         self._get_params(fil_dict)
@@ -363,6 +371,7 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
             self.F_SB2, self.F_PB2, 0.5],[1, 0, 1],
             weight = [fil_dict['W_PB'],fil_dict['W_SB'], fil_dict['W_PB2']],
             fs = 1, grid_density = self.grid_density))
+        logger.info(f"Designed filter with command sig.remez({self.N}, [0, {self.F_PB}, {self.F_SB}, {self.F_SB2}, {self.F_PB2}, 0.5], [1, 0, 1], weight=[{fil_dict['W_PB']}, {fil_dict['W_SB']}, {fil_dict['W_PB2']}], fs=1, grid_density={self.grid_density})")
 
     def BSmin(self, fil_dict):
         self._get_params(fil_dict)
@@ -377,6 +386,7 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
         fil_dict['W_PB2'] = W[2]
         self._save(fil_dict, sig.remez(self.N,F,[1, 0, 1], weight = W, fs = 1,
                                       grid_density = self.grid_density))
+        logger.info(f"Designed filter with command sig.remez({self.N}, {F}, [1, 0, 1], weight={W}, fs=1, grid_density={self.grid_density})")
 
     def HILman(self, fil_dict):
         self._get_params(fil_dict)
@@ -386,6 +396,7 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
                 self.F_PB2, self.F_SB2, 0.5],[0, 1, 0],
                 weight = [fil_dict['W_SB'],fil_dict['W_PB'], fil_dict['W_SB2']],
                 fs = 1, type = 'hilbert', grid_density = self.grid_density))
+        logger.info(f"Designed filter with command sig.remez({self.N}, [0, {self.F_SB}, {self.F_PB}, {self.F_PB2}, {self.F_SB2}, 0.5], [0, 1, 0], weight=[{fil_dict['W_SB']}, {fil_dict['W_PB']}, {fil_dict['W_SB2']}], fs=1, type='hilbert', grid_density={self.grid_density})")
 
     def DIFFman(self, fil_dict):
         self._get_params(fil_dict)
@@ -400,6 +411,7 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
 
         self._save(fil_dict, sig.remez(self.N,[0, self.F_PB],[np.pi*fil_dict['W_PB']],
                 fs = 1, type = 'differentiator', grid_density = self.grid_density))
+        logger.info(f"Designed filter with command sig.remez({self.N}, [0, {self.F_PB}], [{np.pi*fil_dict['W_PB']}], fs=1, type='differentiator', grid_density={self.grid_density})")
 
 
 #------------------------------------------------------------------------------
