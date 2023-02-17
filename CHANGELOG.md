@@ -1,19 +1,56 @@
-## Changelog
-### [v0.6.1](https://github.com/chipmuenk/pyfda/tree/v0.6.0) (2022-03-28)
+# Changelog
+## [v0.7.2](https://github.com/chipmuenk/pyfda/tree/v0.7.2) (2023-02-xx)
+### Bugfixes
+- 
 
-### Bug fixes
+### New features
+- Allow plotting magnitude, real and imaginary part of H(F) at the same time
+- Add legend for H(F) plot
+- Show interpolated waveform x(t) for discrete time stimuli (mainly for didactic
+  purposes)
+- Make UI for y[n] cleaner, allow hiding a part of the toolbars
+
+## [v0.7.1](https://github.com/chipmuenk/pyfda/tree/v0.7.1) (2022-10-05)
+### Bugfixes
+- Fix crash in 'y[n]' tab when no file is loaded
+- Remove some superfluous files in pip package
+
+## [v0.7](https://github.com/chipmuenk/pyfda/tree/v0.7.0) (2022-10-04)
+
+### Bugfixes
+- Fix lot of bugs and redundancies in the fixpoint simulation routines
+- When the filter is complex-valued, set data type to 'complex' for the response
+  signal in y[n] (was 'float' so only the real part was displayed)
+- Fix crash when entering a complex coefficient in a previously real-valued filter
+- Default file filters for QFileDialog objects could not be set in some cases, 
+  producing warning messages in the console
+- Remove module import and version display for module nmigen to avoid message
+  "KeyError: 'V_NMG'"
+
+### New features
+- Show number of pos. and neg. overflows in quantizers
+- Implement IIR DF1 fixpoint filter
+- Export SOS filter coefficients in CMSIS DSP format (via the CSV export options in the coefficient tab)
+- New stimulus Randint process
+- Add sequence length parameter to MLS process, remove PRBS (which was a Randint
+  process with values 0 and 1)
+
+### Maintenance
+- move CSV_option_box to separate module 'csv_option_box.py'
+
+## [v0.6.1](https://github.com/chipmuenk/pyfda/tree/v0.6.1) (2022-03-28)
+
+### Bugfixes
 - Fix crash with matplotlib 3.1 due to missing Axes3D import
 - Fix crash with scipy 1.8.0 by providing local copy of `validate_sos()` (#214)
 
 ### New features
 - Keyboard modifier `<ALT>` hides the plot title when saving a
   figure or copying it to the clipboard
-
 - Add new stimulus "PWM"
-
 - Verified functionality with Python 3.10
 
-### [v0.6.0](https://github.com/chipmuenk/pyfda/tree/v0.6.0) (2021-12-23)
+## [v0.6.0](https://github.com/chipmuenk/pyfda/tree/v0.6.0) (2021-12-23)
 
 ### Bug fixes
 
@@ -120,7 +157,7 @@
   paths and files and -r for replacing the config files with copies of
   the templates
 
-### [v0.5.3](https://github.com/chipmuenk/pyfda/tree/v0.5.3) (2020-12-08)
+## [v0.5.3](https://github.com/chipmuenk/pyfda/tree/v0.5.3) (2020-12-08)
 (There is no release v0.5.2)
 
 ### Bug fixes
@@ -137,7 +174,7 @@
   with the sampling frequency, absolute frequencies remain unchanged
 
 
-### [v0.5.1](https://github.com/chipmuenk/pyfda/tree/v0.5.1) (2020-12-01)
+## [v0.5.1](https://github.com/chipmuenk/pyfda/tree/v0.5.1) (2020-12-01)
 
 ### Bug fixes
 
@@ -159,7 +196,7 @@
   and H_id spectra may be wrong
 
 
-### [v0.5.0](https://github.com/chipmuenk/pyfda/tree/v0.5.0) (2020-11-17)
+## [v0.5.0](https://github.com/chipmuenk/pyfda/tree/v0.5.0) (2020-11-17)
 
 ### New features
 
@@ -195,7 +232,7 @@
 
 - Lots of small fixes
 
-### [v0.4.0](https://github.com/chipmuenk/pyfda/tree/v0.4.0) (2020-10-19)
+## [v0.4.0](https://github.com/chipmuenk/pyfda/tree/v0.4.0) (2020-10-19)
 
 #### New features
 
@@ -225,7 +262,7 @@ general usage. If needed, it can be commented back in the user config file.
 
 - Eliminate tab *Files*, its three buttons have been moved to the *Specs* and the *Info* tab
 
-#### Bug fixes
+### Bug fixes
 - Make compatible to matplotlib 3.3 by cleaning up hierarchy for NavigationToolbar in mpl_widgets.py
  ([Issue \#179](https://github.com/chipmuenk/pyfda/issues/179), [Issue \#44](https://github.com/chipmuenk/pyfda/issues/144)) 
   and get rid of mpl 3.3 related deprecation warnings. Disable zoom rectangle and pan when zoom is locked. 
@@ -246,9 +283,9 @@ general usage. If needed, it can be commented back in the user config file.
 - Enforce correct sign for various input fields
 
 
-### [v0.3](https://github.com/chipmuenk/pyfda/tree/v0.3.1) (2020-05)
+## [v0.3](https://github.com/chipmuenk/pyfda/tree/v0.3.1) (2020-05)
 
-#### New Features
+### New Features
 - display pop-up window for showing time and frequency properties of FFT windows for filter design and spectral analysis of transient signals.
 - overlay ideal frequency response in impulse response window and scale it with the number of FFT points for impulse responses. This allows a direct comparison of the fixpoint frequency response (calculated from the transient response) and the ideal response (calculated from the filter coefficients).
 -  improve parameter entry and tooltipps for windowed FIR filter design
@@ -256,7 +293,7 @@ general usage. If needed, it can be commented back in the user config file.
 -  new AM, FM, PM stimuli for transient response
 -  first successful generation of a binary for Windows using pyinstall. "spec" - files are included for own experiments
 
-#### Bug Fixes
+### Bug Fixes
 
 - only install PyQt5 when it cannot be imported to prevent double installation under conda.
  - don't try to import PyQt4 (pyfda isn't compatible anymore) as this gives strange error messages on some systems
@@ -279,9 +316,9 @@ The truth value of an array with more than one element is ambiguous. Use a.any()
 - rename pole/residue export format suffix to *.txt_rpk
 
 
-### Release 0.2 (2019-05)
+## Release 0.2 (2019-05)
 
-#### New features
+### New features
 
 - **Rework of signal-slot connections**
     * Clearer structure: only one RX / TX signal connection per widget
@@ -303,6 +340,6 @@ The truth value of an array with more than one element is ambiguous. Use a.any()
 
     Could be more and better ... but hey, it's a start!
   
-### Release 0.1 (2018-02-04)
+## Release 0.1 (2018-02-04)
 
 Initial release 

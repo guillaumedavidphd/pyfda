@@ -45,10 +45,11 @@ mpl_ms = 8  # base size for matplotlib markers
 params = {'N_FFT':  2048,   # number of FFT points for plot commands (freqz etc.)
           'FMT': '{:.3g}',  # format string for QLineEdit fields
           'CSV':  {  # format options and parameters for CSV-files and clipboard
-                  'delimiter': ',',  # default delimiter
-                  'lineterminator': CRLF,  # OS-dependend line break from pyfda_lib
+                  'delimiter': 'auto',  # default delimiter
+                  'lineterminator': CRLF,  # OS-dependent line break from pyfda_lib
                   'orientation': 'auto',  # 'auto', 'vert', 'horiz'# table orientation
-                  'header': 'off',  # 'auto', 'on', 'off'
+                  'header': 'auto',  # 'auto', 'on', 'off'
+                  'cmsis' : False,  # True, False
                   'clipboard': False  # source/target is QClipboard or file
                   },
           'FMT_ba': 4,      # number of digits for coefficient table
@@ -57,6 +58,7 @@ params = {'N_FFT':  2048,   # number of FFT points for plot commands (freqz etc.
           'Z_Marker': [mpl_ms, 'b'],  # size and color for zeros' marker
           'wdg_margins': (2, 1, 2, 0),  # (R, T, L, B) widget margins
           'wdg_margins_spc': (2, 2, 2, 2),  # widget margins with more vertical spacing
+          'wdg_margins_0': (0, 0, 0, 0),  # set margins to zero
           'mpl_margins': (0, 0, 0, 0),  # margins around matplotlib widgets
           'mpl_hatch_border': {'linewidth': 1.0, 'color': 'blue', 'linestyle': '--'}
           }
@@ -401,7 +403,20 @@ qss_tab_bar_ovlp = """
 
 # Common qss settings for all themes
 qss_common = """
+                * [state="changed"]{background-color: yellow}
+                /* fully transparent background using white and alpha = 0 */
+                * [state="normal"]{background-color: rgba(255, 255, 255, 0)}
+                * [state="running"]{background-color: orange; color: white;}
+                * [state="highlight"]{background-color: rgba(173, 216, 230, 25%)}
+                * [state="unused"], *[state="u"]{background-color: white; color:darkgrey}
+                /* semi-transparent red */
+                * [state="failed"]{background-color: rgba(255, 0, 0, 50%); color:black}
+
                 QWidget{font-size:10pt; font-family: Tahoma;}
+
+                #large{font-size: 12pt; font-weight: bold; }
+                #xlarge{font-size: 14pt; font-weight: black;}
+
                 /* Frame with control elements of all plot widgets */
                 #frmControls{
                     border-top: solid darkgrey;
@@ -431,6 +446,8 @@ qss_common = """
                     margin: 0;
                     }
 
+                QWidget#transparent{background-color:none}
+
                 /* Dynamic filter subwidget */
                 #wdg_fil{
                     /*background-color:lightblue;*/
@@ -456,8 +473,6 @@ qss_common = """
                     stop: 0 white, stop: 0.5 lightgray, stop: 1.0 #C2C7CB);
                     color: black;}
 
-                QPushButton[state="running"]{background-color: orange; color: white;}
-
                 QPushButton[state="changed"]{background-color: qlineargradient(
                     x1: 0, y1: 0, x2: 0, y2: 1,
                     stop: 0 #cccccc, stop: 0.1 yellow, stop: 1.0 #999999);
@@ -468,14 +483,10 @@ qss_common = """
                     stop: 0 #cccccc, stop: 0.1 red, stop: 1.0 #444444);
                     color: white;}
 
-                QPushButton[state="failed"]{background-color:pink; color:black}
-
                 QPushButton[state="ok"]{background-color: qlineargradient(
                     x1: 0, y1: 0, x2: 0, y2: 1,
                     stop: 0 #cccccc, stop: 0.1 green, stop: 1.0 #444444);
                     color: white;}
-
-                *[state="unused"], *[state="u"]{background-color:white; color:darkgrey}
 
                 QPushButton:pressed {background-color:black; color:white}
 

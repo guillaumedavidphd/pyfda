@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from setuptools import setup, find_packages
+from setuptools import setup, find_packages, find_namespace_packages
 from os import path
 
 here = path.abspath(path.dirname(__file__))
@@ -73,11 +73,13 @@ setup(
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
+        'Programming Language :: Python :: 3.10',
     ],
     # automatically find top-level package and sub-packages input_widgets,
     # plot_widgets etc.:
-    packages=find_packages(exclude=('contrib', 'docs', 'test')),
-    # Read information from MANIFEST.in
+    packages=find_namespace_packages(),  # exclude=('contrib', 'docs', 'tests', 'bak',
+                                        #      'recipe')),
+    # Install data files (specified in MANIFEST.in)
     include_package_data=True,
     # add additional data files (= non *.py) for package / subpackages relative
     # to package directory, include 'qrc_resources.py' instead of 'images/icons/*',

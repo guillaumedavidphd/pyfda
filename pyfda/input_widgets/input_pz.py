@@ -206,13 +206,14 @@ class Input_PZ(QWidget):
         """
         Process signals coming from sig_rx
         """
-        # logger.debug("SIG_RX - data_changed = {0}, vis = {1}\n{2}"
-        #              .format(self.data_changed, self.isVisible(), pprint_log(dict_sig)))
+        # logger.debug(f"SIG_RX - data_changed = {self.data_changed}, vis = "
+        #              f"{self.isVisible()}\n{pprint_log(dict_sig)}")
+
         if dict_sig['id'] == id(self):
             logger.warning("Stopped infinite loop:\n{0}".format(pprint_log(dict_sig)))
             return
 
-        if 'ui_changed' in dict_sig and dict_sig['ui_changed'] == 'csv':
+        if 'ui_global_changed' in dict_sig and dict_sig['ui_global_changed'] == 'csv':
             self.ui._set_load_save_icons()
             # self.emit(dict_sig)
 
@@ -279,8 +280,8 @@ class Input_PZ(QWidget):
         self.ui.butAddCells.clicked.connect(self._add_rows)
         self.ui.butClear.clicked.connect(self._clear_table)
 
-        self.ui.butFromTable.clicked.connect(self._copy_from_table)
-        self.ui.butToTable.clicked.connect(self._copy_to_table)
+        self.ui.butFromTable.clicked.connect(self._export)
+        self.ui.butToTable.clicked.connect(self._import)
 
         self.ui.butSetZero.clicked.connect(self._zero_PZ)
 
@@ -434,7 +435,7 @@ class Input_PZ(QWidget):
         Update zpk[2]?
 
         Called by: load_dict(), _clear_table(), _zero_PZ(), _delete_cells(),
-                add_row(), _copy_to_table()
+                add_row(), _import()
         """
 
         params['FMT_pz'] = int(self.ui.spnDigits.text())
@@ -679,9 +680,9 @@ class Input_PZ(QWidget):
             string
         """
         # convert to "normal" string and prettify via safe_eval:
-        data = safe_eval(qstr(text), return_type='auto')
+        data = safe_eval(text, return_type='auto')
         frmt = qget_cmb_box(self.ui.cmbPZFrmt)  # get selected format
-
+        # logger.warning(f"{text} -> {data}")
         if places == -1:
             full_prec = True
         else:
@@ -724,57 +725,67 @@ class Input_PZ(QWidget):
             logger.error("Unknown format {0}.".format(frmt))
 
     # ------------------------------------------------------------------------------
-    def frmt2cmplx(self, text, default=0.):
+    def frmt2cmplx(self, string, default=0.):
         """
-        Convert format defined by cmbPZFrmt to real or complex
+        Convert string to real or complex, try to find out the format (cartesian,
+        polar with various angle formats)
         """
-        conv_error = False
-        text = qstr(text).replace(" ", "")  # convert to "proper" string without blanks
-        if qget_cmb_box(self.ui.cmbPZFrmt) == 'cartesian':
-            return safe_eval(text, default, return_type='auto')
-        else:
-            # try to split text string at "*<" or the angle character
-            polar_str = text.replace(self.angle_char, '<').split('*<', 1)
+        def str2angle_rad(string: str) -> float:
+            """
+            Try to convert `string` to a corresponding angle in rad
+                Use the following regular expressions:
+                - '$' : matches the end of the string
+                - '|' : combine multiple matches with OR
+            """
+            if re.search('°$|o$', string):
+                # "°" in polar_str[1] or "o" in polar_str[1]:
+                scale = np.pi / 180.  # angle in degrees
+                string = re.sub('o|°', '', string)
+            elif re.search('π$|pi$|p$', string):
+                scale = np.pi
+                string = re.sub('π$|pi$|p$', '', string)
+            else:
+                scale = 1.  # angle in rad
+                string = re.sub('rad', '', string)
 
-            if len(polar_str) < 2:  # input is real or imaginary
-                # remove special characters
-                r = safe_eval(
-                    re.sub('['+self.angle_char+'<∠°]', '', text), default,
-                    return_type='auto')
+            phi = safe_eval(string) * scale
+            return phi
+        # -------------------------------------------
+
+        string = str(string).replace(" ", "")  # remove all blanks
+        if qget_cmb_box(self.ui.cmbPZFrmt) == 'cartesian':
+            return safe_eval(string, default, return_type='auto')
+        else:
+            # convert angle character to "<" and try to split string at "*<"
+            # When the "<" character is not found, this returns a list with 1 item!
+            polar_str = string.replace(self.angle_char, '<').replace('*', '')
+            polar_str = polar_str.split('<', 1)
+
+            if len(polar_str) == 2 and polar_str[0] == "": # pure angle
+                phi = str2angle_rad(polar_str[1])
+                x = np.cos(phi)
+                y = np.sin(phi)
+            elif len(polar_str) == 1:  # no angle found; real / imag / cartesian complex
+                r = safe_eval(string, default, return_type='auto')
                 x = r.real
                 y = r.imag
-            else:
+            else:  # r and angle found
                 r = safe_eval(polar_str[0], sign='pos')
-                if safe_eval.err > 0:
-                    conv_error = True
+                phi = str2angle_rad(polar_str[1])
 
-                if "°" in polar_str[1]:
-                    scale = np.pi / 180.  # angle in degrees
-                elif re.search('π$|pi$', polar_str[1]):
-                    scale = np.pi
-                else:
-                    scale = 1.  # angle in rad
+                x = r * np.cos(phi)
+                y = r * np.sin(phi)
 
-                # remove right-most special characters (regex $)
-                polar_str[1] = re.sub(
-                    '['+self.angle_char+'<∠°π]$|rad$|pi$', '', polar_str[1])
-                phi = safe_eval(polar_str[1]) * scale
-                if safe_eval.err > 0:
-                    conv_error = True
-
-                if not conv_error:
-                    x = r * np.cos(phi)
-                    y = r * np.sin(phi)
-                else:
-                    x = default.real
-                    y = default.imag
-                    logger.error("Expression {0} could not be evaluated.".format(text))
+            if safe_eval.err > 0:
+                x = default.real
+                y = default.imag
+                logger.warning(f"Expression {string} could not be evaluated.")
             return x + 1j * y
 
     # --------------------------------------------------------------------------
-    def _copy_from_table(self):
+    def _export(self):
         """
-        Copy data from coefficient table `self.tblCoeff` to clipboard in CSV format
+        Export data from coefficient table `self.tblCoeff` to clipboard in CSV format
         or to file using a selected format
         """
         # pass table instance, numpy data and current class for accessing the
@@ -782,9 +793,9 @@ class Input_PZ(QWidget):
         qtable2text(self.tblPZ, self.zpk, self, 'zpk', title="Export Poles / Zeros")
 
     # --------------------------------------------------------------------------
-    def _copy_to_table(self):
+    def _import(self):
         """
-        Read data from clipboard / file and copy it to `self.zpk` as array of complex
+        Import data from clipboard / file and copy it to `self.zpk` as array of complex
         # TODO: More checks for swapped row <-> col, single values, wrong data type ...
         """
         data_str = qtext2table(self, 'zpk', title="Import Poles / Zeros ")
@@ -803,7 +814,7 @@ class Input_PZ(QWidget):
         else:
             logger.error("Imported data is a single value or None.")
             return None
-        logger.debug("_copy_to_table: c x r:", num_cols, num_rows)
+        logger.debug("_import: c x r:", num_cols, num_rows)
         if orientation_horiz:
             self.zpk = [[], []]
             for c in range(num_cols):
