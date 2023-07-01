@@ -11,7 +11,6 @@ Create the UI for the Plot_Tran_Impz class
 """
 import collections
 
-from PyQt5.QtWidgets import QSizePolicy
 from pyfda.libs.compat import (
     QWidget, QComboBox, QLineEdit, QLabel, QPushButton,
     pyqtSignal, QEvent, Qt, QHBoxLayout, QVBoxLayout, QGridLayout)
@@ -19,7 +18,7 @@ from pyfda.libs.compat import (
 from pyfda.libs.pyfda_lib import to_html, safe_eval, pprint_log
 import pyfda.filterbroker as fb
 from pyfda.libs.pyfda_qt_lib import (
-    qcmb_box_populate, qget_cmb_box, qtext_width, QVLine)
+    qcmb_box_populate, qget_cmb_box, qtext_width, QVLine, PushButton)
 # FMT string for QLineEdit fields, e.g. '{:.3g}'
 from pyfda.pyfda_rc import params
 
@@ -146,7 +145,7 @@ class Plot_Tran_Stim_UI(QWidget):
 
         # combobox tooltip + data / text / tooltip for file I/O usage
         self.cmb_file_io_items = [
-            ("<span>Select data from File I/O widget/span>"),
+            ("<span>Select data from File I/O widget</span>"),
             ("off", "Off", "<span>Don't use file I/O data.</span>"),
             ("use", "Use", "<span><b>Use</b> file I/O data as stimuli.</span>"),
             ("add", "Add", "<span><b>Add</b> file I/O data to other stimuli</span>")
@@ -283,16 +282,21 @@ class Plot_Tran_Stim_UI(QWidget):
         self.chk_step_err.setChecked(False)
         self.chk_step_err.setObjectName("stim_step_err")
         #
-        line1 = QVLine()
-        #
+        self.but_file_io = PushButton("<", checkable=False)
+        self.but_file_io.setToolTip(
+            "<span>Use file length as number of data points.</span>")
         self.lbl_file_io = QLabel(to_html("&nbsp;File IO", frmt='bi'))
         self.cmb_file_io = QComboBox(self)
+        self.cmb_file_io.setObjectName("cmb_file_io")
         qcmb_box_populate(
             self.cmb_file_io, self.cmb_file_io_items, self.cmb_file_io_default)
-        self.cmb_file_io.setEnabled(False)
-        layV_stim_io = QVBoxLayout()
-        layV_stim_io.addWidget(self.lbl_file_io)
-        layV_stim_io.addWidget(self.cmb_file_io)
+
+        # TODO: layH_file_io is instantiated in plot_impz, this is very hacky
+        self.layH_file_io = QHBoxLayout()
+        self.layH_file_io.addWidget(self.but_file_io)
+        self.layH_file_io.addWidget(self.lbl_file_io)
+        self.layH_file_io.addWidget(self.cmb_file_io)
+        self.layH_file_io.setContentsMargins(0, 0, 0, 0)
         # -------------------------------------
 
         layHCmbStim = QHBoxLayout()
@@ -488,10 +492,6 @@ class Plot_Tran_Stim_UI(QWidget):
         i += 1
         layG_ctrl_stim.addWidget(self.cmbNoise, 0, i)
         layG_ctrl_stim.addLayout(layH_noi_params, 1, i)
-        i += 1
-        # fromRow, fromCol, rowSpan, colSpan
-        layG_ctrl_stim.addWidget(line1, 0, i, 2, 1)
-
         # ----------------------------------------------
         self.lblStimFormula = QLabel(to_html("x =", frmt='bi'), self)
         self.ledStimFormula = QLineEdit(self)
@@ -499,10 +499,6 @@ class Plot_Tran_Stim_UI(QWidget):
         self.ledStimFormula.setToolTip(
             "<span>Enter formula for stimulus in numexpr syntax.</span>")
         self.ledStimFormula.setObjectName("stimFormula")
-
-        layH_formula_stim = QHBoxLayout()
-        layH_formula_stim.addWidget(self.lblStimFormula)
-        layH_formula_stim.addWidget(self.ledStimFormula)
 
         # ----------------------------------------------------------------------
         # Main Widget
@@ -520,21 +516,22 @@ class Plot_Tran_Stim_UI(QWidget):
 
         layH_io_stim = QHBoxLayout()
         layH_io_stim.addWidget(self.wdg_ctrl_stim)
-        layH_io_stim.addLayout(layV_stim_io)
         layH_io_stim.addStretch(10)
         self.wdg_io_stim = QWidget(self)
         self.wdg_io_stim.setLayout(layH_io_stim)
         self.wdg_io_stim.setContentsMargins(0, 0, 0, 0)
 
+        layH_formula_stim = QHBoxLayout()
+        layH_formula_stim.addWidget(self.lblStimFormula)
+        layH_formula_stim.addWidget(self.ledStimFormula)
         self.wdg_formula_stim = QWidget(self)
         self.wdg_formula_stim.setLayout(layH_formula_stim)
         self.wdg_formula_stim.setContentsMargins(0, 0, 0, 0)
 
         layG_stim = QGridLayout()
         layG_stim.addWidget(self.wdg_title_stim, 0, 0, 2, 1)
-        #layG_stim.addWidget(self.wdg_ctrl_stim, 0, 1)
         layG_stim.addWidget(self.wdg_io_stim, 0, 1)
-        layG_stim.addWidget(self.wdg_formula_stim, 1, 1, 1, 2)
+        layG_stim.addWidget(self.wdg_formula_stim, 1, 1)
         layG_stim.setContentsMargins(0, 0, 0, 0)
         layG_stim.setVerticalSpacing(0)
 
@@ -819,8 +816,9 @@ class Plot_Tran_Stim_UI(QWidget):
     # -------------------------------------------------------------
     def _enable_stim_widgets(self):
         """ Enable / disable widgets depending on the selected stimulus """
-        use_file_io = qget_cmb_box(self.cmb_file_io) != "use"
-        self.wdg_ctrl_stim.setVisible(use_file_io)
+        not_use_file_io = qget_cmb_box(self.cmb_file_io) != "use"
+        self.wdg_ctrl_stim.setEnabled(not_use_file_io)
+        self.wdg_formula_stim.setVisible(self.stim == "formula" and not_use_file_io)
 
         self.cmb_stim = qget_cmb_box(self.cmbStimulus)
         if self.cmb_stim == "impulse":
@@ -883,8 +881,6 @@ class Plot_Tran_Stim_UI(QWidget):
         self.lblFreqUnit2.setVisible("f2" in stim_wdg)
         self.lbl_BW2.setVisible("BW2" in stim_wdg)
         self.led_BW2.setVisible("BW2" in stim_wdg)
-        self.lblStimFormula.setVisible(self.stim == "formula" and use_file_io)
-        self.ledStimFormula.setVisible(self.stim == "formula" and use_file_io)
 
         self.cmbImpulseType.setVisible(self.cmb_stim == 'impulse')
         self.cmbSinusoidType.setVisible(self.cmb_stim == 'sinusoid')

@@ -13,7 +13,7 @@ from .pyfda_lib import qstr, pprint_log
 
 from .compat import (
     Qt, QtGui, QtCore, QFrame, QMessageBox, QPushButton, QLabel, QComboBox, QDialog,
-    QFont, QSize, QFontMetrics, QIcon)
+    QFont, QSize, QFontMetrics, QIcon, QEvent)
 from .pyfda_dirs import OS, OS_VER
 
 import logging
@@ -29,6 +29,8 @@ def emit(self, dict_sig: dict = {}, sig_name: str = 'sig_tx') -> None:
       instance if not contained in the dict
     - If key 'ttl' is in the dict and its value is less than one, terminate the
       signal. Otherwise, reduce the value by one.
+    - If the sender has passed an objectName, add it with the key "sender_name"
+      to the dict.
     """
     if 'id' not in dict_sig:
         dict_sig.update({'id': id(self)})
@@ -40,6 +42,8 @@ def emit(self, dict_sig: dict = {}, sig_name: str = 'sig_tx') -> None:
             return
         else:
             dict_sig.update({'ttl': dict_sig['ttl'] - 1})
+    if self.sender() and self.sender().objectName():
+        dict_sig.update({'sender_name': self.sender().objectName()})
     # Get signal (default name: `sig_tx`) from calling instance and emit it
     signal = getattr(self, sig_name)
     signal.emit(dict_sig)
@@ -129,12 +133,49 @@ def qcmb_box_populate(cmb_box: QComboBox, items_list: list, item_init: str) -> N
         if type(items_list[i][1]) == QtGui.QIcon:
             cmb_box.addItem("", items_list[i][0])
             cmb_box.setItemIcon(i-1, items_list[i][1])
-            # cmb_box.setItemData(i-1, items_list[i][0])
         else:
             cmb_box.addItem(cmb_box.tr(items_list[i][1]), items_list[i][0])
         if len(items_list[i]) == 3:  # add item tool tip (optional)
             cmb_box.setItemData(i-1, cmb_box.tr(items_list[i][2]), Qt.ToolTipRole)
     qset_cmb_box(cmb_box, item_init, data=True)
+
+    """ icon = QIcon('logo.png')
+    # adding icon to the given index
+    self.combo_box.setItemIcon(i, icon)
+    size = QSize(10, 10)
+    self.combo_box.setIconSize(size)  """
+
+# ------------------------------------------------------------------------------
+def qcmb_box_add_items(cmb_box: QComboBox, items_list: list) -> None:
+    """
+    Add items to combo box `cmb_box` with text, data and tooltip from the list
+    `items_list`.
+
+    Text and tooltip are prepared for translation via `self.tr()`
+
+    Parameters
+    ----------
+
+    cmb_box: instance of QComboBox
+        Combobox to be populated
+
+    items_list: list
+        List of combobox entries, in the format
+         ("data 1st item", "text 1st item", "tooltip for 1st item" # [optional]),
+         ("data 2nd item", "text 2nd item", "tooltip for 2nd item")]
+
+    Returns
+    -------
+    None
+    """
+    for i in range(0, len(items_list)):
+        if type(items_list[i][1]) == QtGui.QIcon:
+            cmb_box.addItem("", items_list[i][0])
+            cmb_box.setItemIcon(i-1, items_list[i][1])
+        else:
+            cmb_box.addItem(cmb_box.tr(items_list[i][1]), items_list[i][0])
+        if len(items_list[i]) == 3:  # add item tool tip (optional)
+            cmb_box.setItemData(i-1, cmb_box.tr(items_list[i][2]), Qt.ToolTipRole)
 
     """ icon = QIcon('logo.png')
     # adding icon to the given index
@@ -345,7 +386,7 @@ def qstyle_widget(widget, state):
     Apply the "state" defined in pyfda_rc.py to the widget, e.g.:
     Color the >> DESIGN FILTER << button according to the filter design state.
 
-    This requires settinng the property, "unpolishing" and "polishing" the widget
+    This requires setting the property, "unpolishing" and "polishing" the widget
     and finally forcing an update.
 
     - "normal": default, no color styling
@@ -367,6 +408,7 @@ def qstyle_widget(widget, state):
     elif state == 'd':
         state = "disabled"
         # QLineEdit:disabled{background-color:darkgrey;}
+    # widget.setAttribute(Qt.WA_StyledBackground, True)
     widget.setProperty("state", state)
     widget.style().unpolish(widget)
     widget.style().polish(widget)
@@ -534,6 +576,40 @@ def qtext_height(text: str = 'X', font=None) -> int:
     # row4_height = fm.lineSpacing() * 4
     # fm_size = fm.size(0, text)
 
+# ----------------------------------------------------------------------------
+class EventTypes:
+    """
+    https://stackoverflow.com/questions/62196835/how-to-get-string-name-for-qevent-in-pyqt5
+    Events in Qt5: https://doc.qt.io/qt-5/qevent.html
+
+    Stores a string name for each event type.
+
+    With PySide2 str() on the event type gives a nice string name,
+    but with PyQt5 it does not. So this method works with both systems.
+
+    Example usage (simultaneous initialization and method call / translation)
+    > event_str = EventTypes().as_string(QEvent.UpdateRequest)
+    > assert event_str == "UpdateRequest"
+
+    Example usage, separate initialization and method call
+    > event types = EventTypes()
+    > event_str = event_types.as_string(event.type())
+    """
+
+    def __init__(self):
+        """Create mapping for all known event types."""
+        self.string_name = {}
+        for name in vars(QEvent):
+            attribute = getattr(QEvent, name)
+            if type(attribute) == QEvent.Type:
+                self.string_name[attribute] = name
+
+    def as_string(self, event: QEvent.Type) -> str:
+        """Return the string name for this event."""
+        try:
+            return self.string_name[event]
+        except KeyError:
+            return f"UnknownEvent:{event}"
 
 # ----------------------------------------------------------------------------
 class QHLine(QFrame):

@@ -13,7 +13,7 @@ scale. Optionally, the magnitude specifications and the phase
 can be overlayed.
 """
 from pyfda.libs.compat import (QCheckBox, QWidget, QComboBox, QLabel, QLineEdit,
-                               QFrame, QHBoxLayout, QVBoxLayout, pyqtSlot, pyqtSignal)
+                               QFrame, QHBoxLayout, QGridLayout, pyqtSlot, pyqtSignal)
 import numpy as np
 from matplotlib.patches import Rectangle
 from matplotlib import rcParams
@@ -69,13 +69,17 @@ class Plot_Hf(QWidget):
 
         if self.isVisible():
             if 'data_changed' in dict_sig or 'specs_changed' in dict_sig\
-                    or 'home' in dict_sig or self.needs_calc:
+                    or ('mpl_toolbar' in dict_sig and dict_sig['mpl_toolbar'] == 'home')\
+                         or self.needs_calc:
                 self.draw()
                 self.needs_calc = False
                 self.needs_draw = False
             if 'view_changed' in dict_sig or self.needs_draw:
                 self.update_view()
                 self.needs_draw = False
+            elif 'mpl_toolbar' in dict_sig and dict_sig['mpl_toolbar'] == 'ui_level':
+                self.frmControls.setVisible(dict_sig['value'] == 0)
+
         else:
             if 'data_changed' in dict_sig or 'specs_changed' in dict_sig:
                 self.needs_calc = True
@@ -86,19 +90,26 @@ class Plot_Hf(QWidget):
         """
         Define and construct the subwidgets
         """
-        self.chk_show_H_abs = QCheckBox('| H |', self)
+        self.lbl_show_H_abs = QLabel(to_html('| H | ', frmt='b'))
+        self.chk_show_H_abs = QCheckBox(self)
         self.chk_show_H_abs.setChecked(True)
         self.chk_show_H_abs.setToolTip("Show magnitude of H(F)")
-        self.chk_show_H_re = QCheckBox('re{H}', self)
+        self.lbl_show_H_re = QLabel(to_html('re{H}&nbsp;', frmt='b'))
+        self.chk_show_H_re = QCheckBox(self)
         self.chk_show_H_re.setToolTip("Show real part of H(F)")
-        self.chk_show_H_im = QCheckBox('im{H}', self)
+        self.lbl_show_H_im = QLabel(to_html('im{H}', frmt='b'))
+        self.chk_show_H_im = QCheckBox(self)
         self.chk_show_H_im.setToolTip("Show imaginary part of H(F)")
-        layV_show_H = QVBoxLayout()
-        layV_show_H.addWidget(self.chk_show_H_abs)
-        layV_show_H.addWidget(self.chk_show_H_re)
-        layV_show_H.addWidget(self.chk_show_H_im)
-        layV_show_H.setContentsMargins(0,0,0,0)
-        layV_show_H.setSpacing(0)
+
+        layG_show_H = QGridLayout()
+        layG_show_H.addWidget(self.lbl_show_H_abs, 0, 0)
+        layG_show_H.addWidget(self.chk_show_H_abs, 0, 1)
+        layG_show_H.addWidget(self.lbl_show_H_re, 1, 0)
+        layG_show_H.addWidget(self.chk_show_H_re, 1, 1)
+        layG_show_H.addWidget(self.lbl_show_H_im, 2, 0)
+        layG_show_H.addWidget(self.chk_show_H_im, 2, 1)
+        layG_show_H.setContentsMargins(0,0,10,0)
+        layG_show_H.setSpacing(0)
 
         self.lblIn = QLabel(to_html("Unit:", frmt="b"), self)
 
@@ -148,7 +159,7 @@ class Plot_Hf(QWidget):
         # This widget encompasses all control subwidgets
         # ----------------------------------------------------------------------
         layHControls = QHBoxLayout()
-        layHControls.addLayout(layV_show_H)
+        layHControls.addLayout(layG_show_H)
         layHControls.addWidget(self.lblIn)
         layHControls.addWidget(self.cmb_units_a)
         layHControls.addStretch(1)
@@ -181,6 +192,8 @@ class Plot_Hf(QWidget):
         self.mplwidget.layVMainMpl.setContentsMargins(*params['mpl_margins'])
         self.mplwidget.mplToolbar.a_he.setEnabled(True)
         self.mplwidget.mplToolbar.a_he.info = "manual/plot_hf.html"
+        self.mplwidget.mplToolbar.a_ui.setEnabled(True)
+        self.mplwidget.mplToolbar.a_ui_num_levels = 2
         self.setLayout(self.mplwidget.layVMainMpl)
 
         self.init_axes()

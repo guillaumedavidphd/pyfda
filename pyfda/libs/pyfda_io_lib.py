@@ -11,7 +11,9 @@ Library with classes and functions for file and text IO
 """
 import os, re, io
 import csv
+import wave
 import datetime
+import warnings
 from typing import TextIO, Tuple  # replace by built-in tuple from Py 3.9
 
 import pickle
@@ -59,6 +61,12 @@ file_filters_dict = {
     'xls': 'Excel Worksheet',
     'xlsx': 'Excel 2007 Worksheet'
     }
+
+# regex pattern that yields true in a re.search() when only the specified
+#  characters (numeric, "eEjJ(),.+-" and blank / line breaks) are contained
+pattern_num_chars = re.compile('[eEjJ()0-9,\.\+\-\s]+$')
+# regex pattern that identifies characters and their position *not* specified
+pattern_no_num = re.compile('(?![eEjJ()0-9,\.\+\-\s])')
 
 # ------------------------------------------------------------------------------
 def prune_file_ext(file_type: str) -> str:
@@ -128,6 +136,127 @@ def extract_file_ext(file_type: str) -> str:
 
 
 # ------------------------------------------------------------------------------
+def create_file_filters(file_types: tuple, file_filters: str = ""):
+    """
+    Create a string with file filters for QFileDialog object from `file_types`,
+    a tuple of file extensions and the global `file_filters_dict`.
+
+    When the file extension stored after last QFileDialog operation is in the tuple
+    of file types, return this file extension for e.g. preselecting the file type
+    in QFileDialog.
+
+    Parameters
+    ----------
+    file_types : tuple of str
+        list of file extensions which are used to create a file filter.
+
+    file_filters : str
+        String with file filters for QFileDialog object with the form
+        "Comma / Tab Separated Values (*.csv);; Audio (*.wav *.mp3)". By default,
+        this string is empty, but it can be used to add file filters not contained
+        in the global `file_filters_dict`.
+
+    Returns
+    -------
+    file_filters : str
+        String containing file filters for a QFileDialog object
+
+    last_file_filter : str
+        Single file filter to setup the default file extension in QFileDialog
+
+    """
+    for t in file_types:
+        if t in file_filters_dict:
+            file_filters += file_filters_dict[t] + f" (*.{t});;"
+        else:
+            logger.warning(f"Unknown file extension '.{t}'")
+    # remove trailing ';;', otherwise file filter '*' is appended
+    file_filters = file_filters.rstrip(';;')
+
+    if dirs.last_file_type and dirs.last_file_type in file_filters_dict:
+        last_file_filter =\
+            file_filters_dict[dirs.last_file_type] + f" (*.{dirs.last_file_type})"
+    else:
+        last_file_filter = ""
+
+    return file_filters, last_file_filter
+
+
+# ------------------------------------------------------------------------------
+def select_file(parent: object, title: str = "", mode: str = "r",
+                file_types: Tuple[str, ...] = ('csv', 'txt')) -> Tuple[str, str]:
+    """
+    Select a file from a file dialog box for either reading or writing and return
+    the selected file name and type.
+
+    Parameters
+    ----------
+    title : str
+        title string for the file dialog box (e.g. "Filter Coefficients"),
+
+    mode : str
+        file access mode, must be either "r" or "w" for read / write access
+
+    file_types : tuple of str
+        supported file types, e.g. `('txt', 'npy', 'mat') which need to be keys
+        of `file_filters_dict`
+
+    Returns
+    -------
+    file_name: str
+        Fully qualified name of selected file. `None` when operation has been
+        cancelled.
+
+    file_type: str
+        File type, e.g. 'wav'. `None` when operation has been cancelled.
+    """
+
+    file_filters, last_file_filter = create_file_filters(file_types=file_types)
+
+    dlg = QFileDialog(parent)  # create instance for QFileDialog
+    dlg.setDirectory(dirs.last_file_dir)
+    if mode in {"r", "rb"}:
+        if title == "":
+            title = "Import"
+        dlg.setWindowTitle(title)
+        dlg.setAcceptMode(QFileDialog.AcceptOpen)  # set dialog to "file open" mode
+        dlg.setFileMode(QFileDialog.ExistingFile)
+    elif mode in {"w", "wb"}:
+        if title == "":
+            title = "Export"
+        dlg.setWindowTitle(title)
+        dlg.setAcceptMode(QFileDialog.AcceptSave) # set dialog to "file save" mode
+        dlg.setFileMode(QFileDialog.AnyFile)
+    else:
+        logger.error(f"Unknown mode '{mode}'")
+        return None, None
+
+    dlg.setNameFilter(file_filters)  # pass available file filters
+    # dlg.setDefaultSuffix(file_types[0])  # default suffix when none is given
+    if last_file_filter:
+        dlg.selectNameFilter(last_file_filter)  # filter selected in last file dialog
+
+    if dlg.exec_() == QFileDialog.Accepted:
+        file_name = dlg.selectedFiles()[0]  # pick only first selected file
+        file_type = os.path.splitext(file_name)[-1].strip('.')
+        sel_filt = dlg.selectedNameFilter()  # selected file filter
+
+        if file_type == "":
+            # No file type specified, add the type from the file filter
+            file_type = extract_file_ext(sel_filt)[0].strip('.')
+            file_name = file_name + '.' + file_type
+
+        dirs.last_file_name = file_name
+        dirs.last_file_dir = os.path.dirname(file_name)
+        dirs.last_file_type = file_type
+    else:  # operation cancelled
+        file_name = None
+        file_type = None
+
+    return file_name, file_type
+
+
+# ------------------------------------------------------------------------------
 def qtable2text(table: object, data: np.ndarray, parent: object,
                 fkey: str, frmt: str = 'float', title: str = "Export"):
     """
@@ -186,7 +315,7 @@ def qtable2text(table: object, data: np.ndarray, parent: object,
     Returns
     -------
     None
-        Nothing, text is exported to clipboard or to file via ``export_csv_data``
+        Nothing, text is exported to clipboard or to file via ``save_data_csv``
     """
 
     text = ""
@@ -198,11 +327,7 @@ def qtable2text(table: object, data: np.ndarray, parent: object,
         logger.error(
             f"Unknown key '{params['CSV']['header']}' for params['CSV']['header']")
 
-    if params['CSV']['orientation'] in {'horiz', 'auto'}:
-        orientation_horiz = True
-    elif params['CSV']['orientation'] == 'vert':
-        orientation_horiz = False
-    else:
+    if not params['CSV']['orientation'] in {'rows', 'cols', 'auto'}:
         logger.error(
             f"Unknown key '{params['CSV']['orientation']}' for "
             "params['CSV']['orientation']")
@@ -228,16 +353,16 @@ def qtable2text(table: object, data: np.ndarray, parent: object,
     # Nothing selected, copy complete table from the model (data) in float format:
     # ==========================================================================
     if not np.any(sel):
-        if orientation_horiz:  # rows are horizontal
+        if params['CSV']['orientation'] in {'rows', 'auto'}:  # write table in row(s)
             for c in range(num_cols):
-                if use_header:  # add the table header
+                if use_header:  # add the table header at the beginning of the row(s)
                     text += table.horizontalHeaderItem(c).text() + delim
                 for r in range(num_rows):
                     text += str(safe_eval(data[c][r], return_type='auto')) + delim
                 text = text.rstrip(delim) + cr
             text = text.rstrip(cr)  # delete last CR
-        else:  # rows are vertical
-            if use_header:  # add the table header
+        else:  # write table in column(s)
+            if use_header:  # add the table header at the top of the column(s)
                 for c in range(num_cols):
                     text += table.horizontalHeaderItem(c).text() + delim
                 text = text.rstrip(delim) + cr
@@ -251,8 +376,8 @@ def qtable2text(table: object, data: np.ndarray, parent: object,
     # Copy only selected cells in displayed format:
     # =======================================================================
     else:
-        if orientation_horiz:  # horizontal orientation, one or two rows
-            if use_header:  # add the table header
+        if params['CSV']['orientation'] in {'rows', 'auto'}:  # write table in row(s)
+            if use_header:  # insert table header at the beginning of row 1
                 text += table.horizontalHeaderItem(0).text() + delim
             if sel[0]:
                 for r in sel[0]:
@@ -263,14 +388,14 @@ def qtable2text(table: object, data: np.ndarray, parent: object,
 
             if sel[1]:  # returns False for []
                 text += cr  # add a CRLF when there are two columns
-                if use_header:  # add the table header
+                if use_header:  # insert table header at the beginning of row 2
                     text += table.horizontalHeaderItem(1).text() + delim
                 for r in sel[1]:
                     item = table.item(r, 1)
                     if item and item.text() != "":
                         text += table.itemDelegate().text(item) + delim
                 text = text.rstrip(delim)  # remove last tab delimiter again
-        else:  # vertical orientation, one or two columns
+        else:  # write table in column(s)
             sel_c = []
             if sel[0]:
                 sel_c.append(0)
@@ -296,7 +421,7 @@ def qtable2text(table: object, data: np.ndarray, parent: object,
     if params['CSV']['clipboard']:
         fb.clipboard.setText(text)
     else:
-        export_csv_data(parent, text, fkey, title=title)
+        save_data_csv(parent, text, fkey, title=title)
 
 # ==============================================================================
 #     # Here 'a' is the name of numpy array and 'file' is the variable to write in a file.
@@ -380,7 +505,7 @@ def qtext2table(parent: object, fkey: str, title: str = "Import"):
         if file_name is None:  # operation cancelled or error
             return None
         else:
-            data_arr = import_data(file_name, file_type) # fkey,
+            data_arr = load_data_np(file_name, file_type)
             # pass data as numpy array
             logger.debug("Imported data from file. shape = {0} | {1}\n{2}"
                         .format(np.shape(data_arr), np.ndim(data_arr), data_arr))
@@ -392,7 +517,17 @@ def qtext2table(parent: object, fkey: str, title: str = "Import"):
 def csv2array(f: TextIO):
     """
     Convert comma-separated values from file or text
-    to numpy array, taking into accout the settings of the CSV dict.
+    to numpy array, taking into accout the settings of the CSV dict:
+
+    Read data as it is, splitting each row into the column items when:
+    - `CSV_dict['orientation'] == cols` or
+    - `CSV_dict['orientation'] == auto` and cols <= rows:
+
+    Transpose data when:
+    - `CSV_dict['orientation'] == rows` or
+    - `CSV_dict['orientation'] == auto` and cols > rows:
+
+    `np.shape(data)` returns rows, columns
 
     Parameters
     ----------
@@ -407,7 +542,7 @@ def csv2array(f: TextIO):
     -------
 
     data_arr: ndarray
-        numpy array containing table data from file or text when import was
+        numpy array of str with table data from file or text when import was
         successful
 
     OR
@@ -445,11 +580,12 @@ def csv2array(f: TextIO):
     # throw an error (instead of just issueing a deprecation warning) when trying to
     # create a numpy array from nested ragged sequences. This error can then be
     # caught easily.
-    np.warnings.filterwarnings('error', category=np.VisibleDeprecationWarning)
+    warnings.filterwarnings('error', category=np.VisibleDeprecationWarning)
     # ------------------------------------------------------------------------------
     # Get CSV parameter settings
     # ------------------------------------------------------------------------------
     io_error = ""  # initialize string for I/O error messages
+    csv2array.info_str = ""  # initialize function attribute
     CSV_dict = params['CSV']
     try:
         header = CSV_dict['header'].lower()
@@ -461,14 +597,10 @@ def csv2array(f: TextIO):
                 f"Unknown key '{CSV_dict['header']}' for CSV_dict['header'], "
                 f"using {header} instead.")
 
-        orientation_horiz = CSV_dict['orientation'].lower()
-        if orientation_horiz in {'auto', 'vert', 'horiz'}:
-            pass
-        else:
-            orientation_horiz = 'vert'
-            logger.warning(
+        if not CSV_dict['orientation'].lower() in {'auto', 'cols', 'rows'}:
+            logger.error(
                 f"Unknown key '{CSV_dict['orientation']}' for CSV_dict['orientation'], "
-                f"using {orientation_horiz} instead.")
+                "using column mode.")
 
         tab = CSV_dict['delimiter'].lower()
         cr = CSV_dict['lineterminator'].lower()
@@ -477,35 +609,32 @@ def csv2array(f: TextIO):
         io_error = "Dict 'params':\n{0}".format(e)
         return io_error
 
-    try:
-        # ------------------------------------------------------------------------------
-        # Analyze CSV object
-        # ------------------------------------------------------------------------------
-        if header == 'auto' or tab == 'auto' or cr == 'auto':
-            # test the first line for delimiters (of the given selection)
-            dialect = csv.Sniffer().sniff(f.readline(),
-                                          delimiters=['\t', ';', ',', '|', ' '])
-            f.seek(0)                               # and reset the file pointer
-        else:
-            # fall back, alternatives: 'excel', 'unix':
+    sample = ""
+
+    # ------------------------------------------------------------------------------
+    # Analyze CSV object
+    # ------------------------------------------------------------------------------
+    if header == 'auto' or tab == 'auto' or cr == 'auto':
+        # test the first line for delimiters (of the given selection)
+        sample = f.readline()
+        f.seek(0)  # and reset the file pointer
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=['\t', ';', ',', '|', ' '])
+        except csv.Error as e:
+            logger.warning(f'CSV sniffing reported "{e}",\n'
+                        'continuing with format "excel-tab"')
             dialect = csv.get_dialect('excel-tab')
+    else:
+        # fall back, alternatives: 'excel', 'unix':
+        dialect = csv.get_dialect('excel-tab')
 
-        if header == "auto":
-            # True when header detected:
-            use_header = csv.Sniffer().has_header(f.read(10000))
-            f.seek(0)
-
-    except csv.Error as e:
-        logger.warning("Error during CSV analysis:\n{0},\n"
-                       "continuing with format 'excel-tab'".format(e))
-        dialect = csv.get_dialect('excel-tab')  # fall back
-        use_header = False
-
-    if header == 'on':
+    if header == "auto":
+        # yields True when a non-numeric character is detected, indicating a header:
+        use_header = not pattern_num_chars.search(sample)
+    elif header == 'on':
         use_header = True
-    if header == 'off':
+    else:
         use_header = False
-    # case 'auto' has been treated above
 
     delimiter = dialect.delimiter
     lineterminator = dialect.lineterminator
@@ -519,8 +648,7 @@ def csv2array(f: TextIO):
 
     logger.info(f"Parsing CSV data with header = '{use_header}'\n"
                 f"\tDelimiter = {repr(delimiter)} | Lineterm. = {repr(lineterminator)} "
-                f"| quotechar = ' {quotechar} '\n"
-                f"\tType of passed text: '{f.__class__.__name__}'")
+                f"| quotechar = ' {quotechar} as '{f.__class__.__name__}'")
 
     # --------------------------------------------------------------------------
     # finally, create iterator from csv data
@@ -545,118 +673,66 @@ def csv2array(f: TextIO):
 # =============================================================================
 
     if use_header:
-        logger.info("Headers:\n{0}".format(next(data_iter, None)))  # py3 and py2
+        logger.info("Header detected:\n{0}".format(next(data_iter, None)))
 
+    csv2array.info_str = f"'{repr(lineterminator)}' # '{repr(delimiter)}'"
+
+    # ------- Read CSV file into a list --------------------
     data_list = []
     try:
         for row in data_iter:
             logger.debug("{0}".format(row))
-            data_list.append(row)
+            if row:  # only append non-empty rows
+                data_list.append(row)
     except csv.Error as e:
         io_error = f"Error during CSV import:\n{e}"
         return io_error
 
+    if data_list == [] or data_list ==[""]:
+            return "Imported data is empty."
+
+    # ------- Try to convert list to an array of str --------------------
     try:
-        if data_list is None:
-            return "Imported data is None."
-        try:
-            data_arr = np.array(data_list)
-        except np.VisibleDeprecationWarning:
-            # prevent creation of numpy arrays from nested ragged sequences
-            return "Columns with different number of elements."
-
-        if np.ndim(data_arr) == 0 or (np.ndim(data_arr) == 1 and len(data_arr) < 2):
-            return f"Imported data is a scalar: '{data_arr}'"
-        elif np.ndim(data_arr) == 1:
-            if len(data_arr) < 2:
-                return f"Not enough data: '{data_arr}'"
-            else:
-                return data_arr
-        elif np.ndim(data_arr) == 2:
-            cols, rows = np.shape(data_arr)
-            logger.debug(f"cols = {cols}, rows = {rows}, data_arr = {data_arr}\n")
-            if cols > 2 and rows > 2:
-                return f"Unsuitable data shape {np.shape(data_arr)}"
-            elif cols > rows:
-                logger.warning("Swapping rows and columns.")
-                return data_arr.T
-            else:
-                return data_arr
-        else:
-            return "Unsuitable data shape: ndim = {0}, shape = {1}"\
-                .format(np.ndim(data_arr), np.shape(data_arr))
-
+        data_arr = np.array(data_list)
+    except np.VisibleDeprecationWarning:
+        # prevent creation of numpy arrays from nested ragged sequences
+        return "Can't convert to array, columns have different lengths."
     except (TypeError, ValueError) as e:
-        io_error = "{0}\nFormat = {1}\n{2}".format(e, np.shape(data_arr), data_list)
+        io_error = f"{e}\nData = {pprint_log(data_list)}"
         return io_error
 
-# =============================================================================
-#     try:
-#         data_arr = np.array(data_list)
-#         cols, rows = np.shape(data_arr)
-#         logger.debug("cols = {0}, rows = {1}, data_arr = {2}\n"
-#                       .format(cols, rows, data_arr))
-#         if params['CSV']['orientation'] == 'vert':
-#             return data_arr.T
-#         else:
-#             return data_arr
-#
-#     except (TypeError, ValueError) as e:
-#         io_error = "{0}\nFormat = {1}\n{2}".format(e, np.shape(data_arr), data_list)
-#         return io_error
-#
-# =============================================================================
+    if np.ndim(data_arr) == 0:
+        return f"Imported data is a scalar: '{data_arr}'"
 
-
-# ------------------------------------------------------------------------------
-def create_file_filters(file_types: tuple, file_filters: str = ""):
-    """
-    Create a string with file filters for QFileDialog object from `file_types`,
-    a tuple of file extensions and the global `file_filters_dict`.
-
-    When the file extension stored after last QFileDialog operation is in the tuple
-    of file types, return this file extension for e.g. preselecting the file type
-    in QFileDialog.
-
-    Parameters
-    ----------
-    file_types : tuple of str
-        list of file extensions which are used to create a file filter.
-
-    file_filters : str
-        String with file filters for QFileDialog object with the form
-        "Comma / Tab Separated Values (*.csv);; Audio (*.wav *.mp3)". By default,
-        this string is empty, but it can be used to add file filters not contained
-        in the global `file_filters_dict`.
-
-    Returns
-    -------
-    file_filters : str
-        String containing file filters for a QFileDialog object
-
-    last_file_filter : str
-        Single file filter to setup the default file extension in QFileDialog
-
-    """
-    for t in file_types:
-        if t in file_filters_dict:
-            file_filters += file_filters_dict[t] + f" (*.{t});;"
+    elif np.ndim(data_arr) == 1:
+        if len(data_arr) < 2:
+            return f"Not enough data: '{data_arr}'"
         else:
-            logger.warning(f"Unknown file extension '.{t}'")
-    # remove trailing ';;', otherwise file filter '*' is appended
-    file_filters = file_filters.rstrip(';;')
+            return data_arr
 
-    if dirs.last_file_type and dirs.last_file_type in file_filters_dict:
-        last_file_filter =\
-            file_filters_dict[dirs.last_file_type] + f" (*.{dirs.last_file_type})"
+    elif np.ndim(data_arr) == 2:
+        rows, cols = np.shape(data_arr)
+        # logger.info(f"cols = {cols}, rows = {rows}, data_arr = {data_arr}\n")
+        if cols > 2 and rows > 2:
+            return f"Unsuitable data shape {np.shape(data_arr)}"
+        elif params['CSV']['orientation'] == 'rows'\
+                or params['CSV']['orientation'] == 'auto' and cols > rows:
+            # returned table is transposed, swap cols and rows
+            logger.info(f"Building transposed table with {cols} row(s) and {rows} columns.")
+            csv2array.info_str = "T:" + csv2array.info_str
+            return data_arr.T
+        else:
+            logger.info(f"Building table with {cols} column(s) and {rows} rows.")
+            return data_arr
     else:
-        last_file_filter = ""
-
-    return file_filters, last_file_filter
+        return "Unsuitable data shape: ndim = {0}, shape = {1}"\
+            .format(np.ndim(data_arr), np.shape(data_arr))
 
 #-------------------------------------------------------------------------------
-def read_csv_info(filename):
+def read_csv_info_old(filename):
+#-------------------------------------------------------------------------------
     """
+    DON'T USE ANYMORE!
     Get infos about the size of a csv file without actually loading the whole
     file into memory.
 
@@ -666,53 +742,54 @@ def read_csv_info(filename):
     file_size = os.path.getsize(filename)
     logger.info(f"File Size is {file_size} bytes")
 
-    # if file_size < 1e6:
-    #     sniff_size = file_size + 10  # run sniffer over whole file
-    # else:
-    #     sniff_size = 50000  # only read first 50000 chars
-
     sniffer = csv.Sniffer()
-    # TODO: detect and skip header
-    # TODO: count other linebreaks as well
-    horizontal = False
 
     with open(filename) as f:
         first_line = f.readline()
         sample = first_line + f.readline()
-
-        has_header = sniffer.has_header(sample)
+        # pattern search returns true when only allowed characters are found
+        # when the first line contains other characters, it is assumed that this
+        # is a header
+        has_header = not pattern_num_chars.search(sample)
+        # if has_header:
+        #      logger.warning(pattern_no_num.search(sample))
         dialect = sniffer.sniff(sample)
         delimiter = dialect.delimiter
         lineterminator = repr(dialect.lineterminator)
 
-        nchans = first_line.count(delimiter) + 1
+        nchans = first_line.count(delimiter) + 1  # number of columns
         # count rows in file
         f.seek(0)
-        N = sum(1 for row in f)  # f isfileobject (csv.reader)
+        N = sum(1 for row in f)  # f isfileobject (csv.reader)  # number of rows
 
     del f
 
     logger.info(f"Terminator = '{lineterminator}', Delimiter = '{delimiter}', "
                 f"RowCount = {N}, Header={has_header}")
 
-    if N < nchans:  # swap rows and columns
+    if not params['CSV']['orientation'] in {'rows', 'cols', 'auto'}:
+        logger.error(
+            f"Unknown key '{params['CSV']['orientation']}' for "
+            "params['CSV']['orientation']")
+    if params['CSV']['orientation'] == 'auto' and (N < nchans)\
+        or params['CSV']['orientation'] == 'rows':  # swap rows and columns
         N, nchans = nchans, N
-        horizontal = True
+        row_mode = True
         transpose = "T #"
     else:
-        horizontal = False
+        row_mode = False
         transpose = ""
 
     if N < 2:
-        logger.error(f"No suitable CSV file, has {N} data entries.")
+        logger.error(f"No suitable CSV file, has only {N} data entries.")
         return -1
 
     # file is ok, copy local variables to function attributes
-    read_csv_info.horizontal = horizontal
+    read_csv_info.row_mode = row_mode
     read_csv_info.file_size = file_size
     read_csv_info.N = N
     read_csv_info.nchans = nchans
-    read_csv_info.info = f"{transpose} '{lineterminator}' # '{delimiter}'"
+    read_csv_info.info_str = f"{transpose} '{lineterminator}' # '{delimiter}'"
 
     return 0
 
@@ -723,7 +800,7 @@ def read_wav_info(file):
     loading the whole file into memory. This is achieved by reading the
     header.
     """
-
+    # https://wavefilegem.com/how_wave_files_work.html
     # https://stackoverflow.com/questions/7833807/get-wav-file-length-or-duration
     # http://soundfile.sapp.org/doc/WaveFormat/
     # https://ccrma.stanford.edu/courses/422/projects/WaveFormat/
@@ -751,18 +828,25 @@ def read_wav_info(file):
     # Pos. 12: String 'fmt ' marks beginning of format subchunk
     FMT = HEADER[12:16]  # f.read(4)
     if FMT != "fmt ":  # pos. 12
-        logger.error(f"Invalid format header {FMT}!")
+        logger.error(f"Invalid format header '{FMT}' instead of 'fmt'!")
         return -1
 
-    # Pos. 16: Size of subchunk with format infos, must be 16 bytes for PCM
-    fmt_chnk_size1 = str2int(HEADER[16:20])  # pos. 16
-    if fmt_chnk_size1 != 16:
+    # Pos. 16: Size of subchunk with format infos in bytes, 16 for Int., 18 for float
+    fmt_chnk_size1 = str2int(HEADER[16:20])
+    if fmt_chnk_size1 not in {16, 18}:
         logger.error(f"Invalid size {fmt_chnk_size1} of format subchunk!")
         return -1
 
     # Pos. 20: Audio encoding format, must be 1 for uncompressed PCM
-    if str2int(HEADER[20:22]) != 1:
-        logger.error(f"Invalid audio encoding, only PCM supported!")
+    encoding = str2int(HEADER[20:22])
+    if encoding == 1:
+        sample_format = "int"  # Integer PCM
+    elif encoding == 3:
+        sample_format = "float"  # IEEE Float PCM
+    else:
+        logger.error(f"Invalid audio encoding {encoding}, only uncompressed "
+                     "PCM supported!")
+        sample_format = ""
         return -1
 
     # Pos. 22: Number of channels
@@ -781,19 +865,56 @@ def read_wav_info(file):
     # Pos. 34: Bits per sample, WL = wordlength in bytes
     bits_per_sample = str2int(f.read(2))
 
-    # Pos. 36: String 'data' marks beginning of data subchunk
+    if sample_format == "float":
+        # Format subchunk is 18 bytes long for float samples, hence file pointer
+        # has to be advanced by two bytes
+        _ = f.read(2)
+
+        # ###################### FACT Subchunk ###################################
+        # The fact chunk indicates how many sample frames are in the file. For
+        # integer formats the tag it’s optional; otherwise it’s required. For float
+        # PCM, calculation is performed exactly as for integer PCM, hence, it is not
+        # evaluated here.
+        FACT = f.read(12)
+
+    # ###################### DATA Subchunk #######################################
+    # String 'data' marks beginning of data subchunk
     DATA = f.read(4)
     if DATA != "data":
-        logger.error(f"Invalid data header {DATA}!")
+        logger.error(f"Invalid data header '{DATA}' instead of 'data'!")
         return -1
 
     # -- Function attributes that are accessible from outside
     # ------------------------------------------------------------
     read_wav_info.file_size = file_size
+
+    if sample_format == "int":
+        if bits_per_sample == 8:
+            read_wav_info.sample_format = "UInt8"
+        elif bits_per_sample == 16:
+            read_wav_info.sample_format = "Int16"
+        elif bits_per_sample == 24:
+            read_wav_info.sample_format = "Int24"
+        elif bits_per_sample == 32:
+            read_wav_info.sample_format = "Int32"
+        else:
+            logger.error("Unsupported integer sample format with {bits_per_sample} "
+                         "bits per sample.")
+            return -1
+    else:
+        if bits_per_sample == 32:
+            read_wav_info.sample_format = "Float32"
+        elif bits_per_sample == 64:
+            read_wav_info.sample_format = "Float64"
+        else:
+            logger.error("Unsupported float sample format with {bits_per_sample} "
+                         "bits per sample.")
+            return -1
+
     read_wav_info.WL = bits_per_sample // 8  # Wordlength in bytes
 
-    # Pos. 40: Total number of samples per channel
-    read_wav_info.N = str2int(HEADER[40:44]) // (nchans * read_wav_info.WL)
+    # Pos. 40 or 42: Total number of samples per channel
+    read_wav_info.N = str2int(f.read(4)) // (nchans * read_wav_info.WL)
 
     read_wav_info.nchans = nchans  # number of channels
 
@@ -805,72 +926,7 @@ def read_wav_info(file):
     return 0
 
 # ------------------------------------------------------------------------------
-def select_file(parent: object, title: str = "Import", mode: str = "r",
-                file_types: Tuple[str, ...] = ('csv', 'txt')) -> Tuple[str, str]:
-    """
-    Parameters
-    ----------
-    title : str
-        title string for the file dialog box (e.g. "Filter Coefficients"),
-
-    mode : str
-        file access mode, must be either "r" or "w" for read / write access
-
-    file_types : tuple of str
-        supported file types, e.g. `('txt', 'npy', 'mat') which need to be keys
-        of `file_filters_dict`
-
-    Returns
-    -------
-    file_name: str
-        Fully qualified name of selected file. `None` when operation has been
-        cancelled.
-
-    file_type: str
-        File type, e.g. 'wav'. `None` when operation has been cancelled.
-    """
-
-    file_filters, last_file_filter = create_file_filters(file_types=file_types)
-
-    dlg = QFileDialog(parent)  # create instance for QFileDialog
-    dlg.setWindowTitle(title)
-    dlg.setDirectory(dirs.last_file_dir)
-    if mode in {"r", "rb"}:
-        dlg.setAcceptMode(QFileDialog.AcceptOpen)  # set dialog to "file open" mode
-        dlg.setFileMode(QFileDialog.ExistingFile)
-    elif mode in {"w", "wb"}:
-        dlg.setAcceptMode(QFileDialog.AcceptSave) # set dialog to "file save" mode
-        dlg.setFileMode(QFileDialog.AnyFile)
-    else:
-        logger.error(f"Unknown mode '{mode}'")
-        return None, None
-
-    dlg.setNameFilter(file_filters)  # pass available file filters
-    # dlg.setDefaultSuffix(file_types[0])  # default suffix when none is given
-    if last_file_filter:
-        dlg.selectNameFilter(last_file_filter)  # filter selected in last file dialog
-
-    if dlg.exec_() == QFileDialog.Accepted:
-        file_name = dlg.selectedFiles()[0]  # pick only first selected file
-        file_type = os.path.splitext(file_name)[-1].strip('.')
-        sel_filt = dlg.selectedNameFilter()  # selected file filter
-
-        if file_type == "":
-            # No file type specified, add the type from the file filter
-            file_type = extract_file_ext(sel_filt)[0].strip('.')
-            file_name = file_name + '.' + file_type
-
-        dirs.last_file_name = file_name
-        dirs.last_file_dir = os.path.dirname(file_name)
-        dirs.last_file_type = file_type
-    else:  # operation cancelled
-        file_name = None
-        file_type = None
-
-    return file_name, file_type
-
-# ------------------------------------------------------------------------------
-def import_data(file_name: str, file_type: str, fkey: str = "")-> np.ndarray:
+def load_data_np(file_name: str, file_type: str, fkey: str = "")-> np.ndarray:
     """
     Import data from a file and convert it to a numpy array.
 
@@ -888,9 +944,10 @@ def import_data(file_name: str, file_type: str, fkey: str = "")-> np.ndarray:
 
     Returns
     -------
-    ndarray of float
-        Data from the file
+    ndarray of float or int
+        Data from the file (ndarray) or None (error), -1 for file cancel
     """
+    load_data_np.info_str = "" # function attribute for file infos
     if file_name is None:  # error or operation cancelled
         return -1
 
@@ -901,15 +958,15 @@ def import_data(file_name: str, file_type: str, fkey: str = "")-> np.ndarray:
             # data_arr is 1D for single channel (mono) files and
             # 2D otherwise (n_chans, n_samples)
             fb.fil[0]['f_S_wav'] = f_S
-            if np.ndim(data_arr) == 2:
-                data_arr = np.transpose(data_arr)
 
         elif file_type in {'csv', 'txt'}:
             with open(file_name, 'r', newline=None) as f:
                 data_arr = csv2array(f)
+                load_data_np.info_str = csv2array.info_str
                 # data_arr = np.loadtxt(f, delimiter=params['CSV']['delimiter'].lower())
                 if isinstance(data_arr, str):
                     # returned an error message instead of numpy data:
+                    load_data_np.info_str = ""
                     logger.error(f"Error loading file '{file_name}':\n{data_arr}")
                     return None
         else:
@@ -936,12 +993,15 @@ def import_data(file_name: str, file_type: str, fkey: str = "")-> np.ndarray:
 
         if not err:
             try:  # try to convert array elements to float
-                data_arr = data_arr.astype(np.float)
+                data_arr = data_arr.astype(float)
             except ValueError as e:
-                logger.error(e)
-                return None
+                try:
+                    data_arr = data_arr.astype(complex)
+                except ValueError:
+                    logger.error(f"{e},\n\tconversion to complex also failed.")
+                    return None
             logger.info(
-                f'Imported file "{file_name}"\n{pprint_log(data_arr, N=3)}')
+                f'Imported file "{file_name}"\n{pprint_log(data_arr, N=5)}')
             return data_arr  # returns numpy array of type float
 
     except IOError as e:
@@ -950,7 +1010,129 @@ def import_data(file_name: str, file_type: str, fkey: str = "")-> np.ndarray:
 
 
 # ------------------------------------------------------------------------------
-def export_csv_data(parent: object, data: str, fkey: str = "", title: str = "Export",
+def save_data_np(file_name: str, file_type: str, data: np.ndarray,
+                 f_S: int = 1, fmt: str = '%f') -> int:
+    """
+    Save numpy data to a file in wav or csv format
+
+    Parameters
+    ----------
+    file_name: str
+        Full path and name of the file to be imported
+
+    file_type: str
+        File type (e.g. 'wav')
+
+    data : np.ndarray
+        Data to be saved to a file. The data dtype (uint8, int16, int32, float32)
+        determines the bits-per-sample and PCM/float of the WAV file
+
+    f_S : int (optional)
+        Sampling frequency (only used for WAV file format), only integer sampling
+        frequencies are supported by the WAV format.
+
+    fmt : str (optional)
+        Optional, default '%f'. Format string, only used for exporting data in CSV
+        format. Other options are e.g. '%1.2f' for reduced number of digits, '%d' for
+        integer format or '%s' for strings.
+
+    Returns
+    -------
+    0 for success, -1 for file cancel or error
+    """
+    # file_name, file_type = select_file(parent, title=title, mode='wb', file_types=('wav'))
+
+    if file_name is None:  # error or operation cancelled
+        return -1
+    elif np.ndim(data) < 1 or np.ndim(data) > 2:
+        logger.error(f"Unsuitable data format for a wav file, ndim = {np.ndim(data)}.")
+        logger.error(data)
+        return -1
+    try:
+        if file_type == 'wav':
+            f_S_int = int(abs(f_S))
+            if f_S_int == 0:
+                f_S_int = 1
+            if f_S != f_S_int:
+                logger.warning(
+                    "Only integer sampling frequencies can be used for WAV files,\n"
+                    f"sampling frequency has been changed to f_S = {f_S_int}")
+
+            # audio = data.T  # transpose data, needed?
+            wavfile.write(file_name, f_S_int, data)
+            # To write multiple-channels, use a 2-D array of shape (Nsamples, Nchannels).
+
+        elif file_type == 'csv':
+            delimiter = params['CSV']['delimiter'].lower()
+            if delimiter == 'auto':
+                delimiter = ','
+            np.savetxt(file_name, data, fmt=fmt, delimiter=delimiter)
+            # TODO: Integer formats like int16 should be stored as integers
+        else:
+            logger.error(f"File type {file_type} not supported!")
+            return -1
+
+        logger.info(f'Filter saved as\n\t"{file_name}"')
+        return 0
+
+
+    except IOError as e:
+        logger.error('Failed saving "{0}"!\n{1}\n'.format(file_name, e))
+        return -1
+
+# ------------------------------------------------------------------------------
+def write_wav_frame(parent, file_name, data: np.array, f_S = 1,
+                    title: str = "Export"):
+    """
+    Export a frame of data in wav format
+
+    Parameters
+    ----------
+    parent: handle to calling instance for creating file dialog instance
+
+    data: np.array
+        data to be exported
+
+    title: str
+        title string for the file dialog box (e.g. "audio data ")
+
+    """
+    file_name, file_type = select_file(parent, title=title, mode='wb', file_types=('wav'))
+    if file_name is None:
+        return None  # file operation cancelled or other error
+
+    try:
+        if np.ndim(data) == 1:  # mono
+            audio = data
+            n_chan = 1
+        elif np.ndim(data) != 2:
+            logger.error(f"Unsuitable data format, ndim = {np.ndim(data)}.")
+            return
+        elif np.shape(data)[1] != 2:
+            logger.error(f"Unsuitable number of channels = {np.shape(data)[1]}")
+            return
+        else:
+            audio = data.T  # transpose data
+            n_chan = np.shape(data)[1]
+            # audio = np.array([left_channel, right_channel]).T
+        with wave.open(file_name, "w") as f:
+            # 2 Channels.
+            f.setnchannels(n_chan)
+            # 2 bytes per sample.
+            f.setsampwidth(2)
+            f.setframerate(f_S)
+            f.writeframes(audio.tobytes())
+        with open(file_name, 'w', encoding="utf8", newline='') as f:
+                        f.write(data)
+
+        logger.info(f'Filter saved as\n\t"{file_name}"')
+
+    except IOError as e:
+        logger.error('Failed saving "{0}"!\n{1}\n'.format(file_name, e))
+
+
+# ------------------------------------------------------------------------------
+def save_data_csv(parent: object, data: str, fkey: str = "", title: str = "Export",
                 file_types: Tuple[str, ...] = ('csv', 'mat', 'npy', 'npz')):
     """
     Export coefficients or pole/zero data in various formats
@@ -975,7 +1157,7 @@ def export_csv_data(parent: object, data: str, fkey: str = "", title: str = "Exp
         which are used to create a file filter.
     """
     logger.debug(
-        f"imported data: type{type(data)}|dim{np.ndim(data)}|"
+        f"export data: type{type(data)}|dim{np.ndim(data)}|"
         f"shape{np.shape(data)}\n{data}")
 
     # add file types for FIR filter coefficients
@@ -1058,8 +1240,8 @@ def export_csv_data(parent: object, data: str, fkey: str = "", title: str = "Exp
                     # Write some numbers, with row/column notation.
                     for col in range(2):
                         for row in range(np.shape(data)[1]):
-                            worksheet.write(row+1, col, data[col][row])  # vertical
-        #                    worksheet.write(row, col, coeffs[col][row])  # horizontal
+                            worksheet.write(row+1, col, data[col][row])  # columns
+        #                    worksheet.write(row, col, coeffs[col][row])  # rows
 
                     # Insert an image - useful for documentation export ?!.
         #            worksheet.insert_image('B5', 'logo.png')
@@ -1082,7 +1264,7 @@ def export_csv_data(parent: object, data: str, fkey: str = "", title: str = "Exp
 
 
 # ------------------------------------------------------------------------------
-def generate_header(title: str) -> str:
+def coe_header(title: str) -> str:
     """
     Generate a file header (comment) for various FPGA FIR coefficient export formats
     with information on the filter type, corner frequencies, ripple etc
@@ -1211,7 +1393,7 @@ def export_coe_xilinx(f: TextIO) -> None:
     # Quantize coefficients to decimal / hex integer format, returning an array of strings
     bq = qc.float2frmt(fb.fil[0]['ba'][0])
 
-    exp_str = "; " + generate_header(
+    exp_str = "; " + coe_header(
         "XILINX CORE Generator(tm) Distributed Arithmetic FIR filter coefficient (.COE) file").replace("\n", "\n; ")
 
     exp_str += "\nRadix = {0};\n".format(coe_radix)
@@ -1291,7 +1473,7 @@ def export_coe_vhdl_package(f: TextIO) -> None:
     # Quantize coefficients to selected fixpoint format, returning an array of strings
     bq = qc.float2frmt(fb.fil[0]['ba'][0])
 
-    exp_str = "-- " + generate_header(
+    exp_str = "-- " + coe_header(
         "VHDL FIR filter coefficient package file").replace("\n", "\n-- ")
 
     exp_str += "\nlibrary IEEE;\n"
@@ -1419,7 +1601,7 @@ def save_filter(self):
     Save filter as zipped binary numpy array or pickle object
     """
     file_name, file_type = select_file(
-        self, title="Load Filter", mode='wb', file_types = ("npz", "pkl"))
+        self, title="Save Filter", mode='wb', file_types = ("npz", "pkl"))
 
     if file_name is None:
         return -1  # operation cancelled or other error

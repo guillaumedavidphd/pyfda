@@ -11,7 +11,8 @@ Create the UI for the PlotImz class
 """
 from pyfda.libs.compat import (
     QCheckBox, QWidget, QComboBox, QLineEdit, QLabel, QPushButton, QPushButtonRT,
-    QIcon, QProgressBar, pyqtSignal, QSize, QHBoxLayout, QVBoxLayout, QGridLayout)
+    QIcon, QProgressBar, pyqtSignal, QSize, QFrame,
+    QHBoxLayout, QVBoxLayout, QGridLayout)
 
 from pyfda.libs.pyfda_lib import to_html, safe_eval, pprint_log
 import pyfda.filterbroker as fb
@@ -139,15 +140,6 @@ class PlotImpz_UI(QWidget):
             ("fixpoint", "Fixpoint", "fixpoint simulation")
         ]
 
-        # combobox UI selection
-        self.cmb_ui_select_items = [
-            "<span>Select UI elements to display.</span>",
-            ("plot_stim", "Plot + Stim", "Show plot and stimuli selection widgets"),
-            ("plot", "Plot", "Only show plot selection widget"),
-            ("stim", "Stimuli", "Only show stimuli selection widget"),
-            ("none", "Compact", "Compact view, show neither plot nor stimuli widget")
-        ]
-
         # data / icon / tooltipp (none) for plotting styles
         self.plot_styles_list = [
             ("Plot style"),
@@ -220,6 +212,7 @@ class PlotImpz_UI(QWidget):
                           self.cmb_sim_select_init)
 
         self.prg_wdg = QProgressBar(self)
+        self.prg_wdg.setToolTip("Show simulation progress")
         self.prg_wdg.setFixedHeight(but_height)
         self.prg_wdg.setFixedWidth(qtext_width(N_x=6))
         self.prg_wdg.setMinimum(0)
@@ -238,21 +231,21 @@ class PlotImpz_UI(QWidget):
         self.led_N_start.setToolTip("<span>First point to plot.</span>")
         self.led_N_start.setMaximumWidth(qtext_width(N_x=8))
 
-        self.lbl_N_frame = QLabel(to_html("&Delta;N", frmt='bi') + " =", self)
+        self.lbl_N_frame = QLabel(to_html("N_Frame", frmt='bi') + " =", self)
+        self.lbl_N_frame.setVisible(False)
         self.led_N_frame = QLineEdit(self)
         self.led_N_frame.setText(str(self.N_frame))
         self.led_N_frame.setToolTip(
             "<span>Frame length; longer frames calculate faster but calculation cannot "
             "be stopped so quickly. "
-            "<i>&Delta;N</i> = 0 calculates all samples in one frame.</span>")
+            "<i>N</i><sub>Frame</sub> = 0 calculates all samples in one frame.</span>")
         self.led_N_frame.setMaximumWidth(qtext_width(N_x=8))
+        self.led_N_frame.setVisible(False)
 
-        self.lbl_ui_select = QLabel(self)
-        self.lbl_ui_select = QLabel(to_html("UI", frmt='b'), self)
-
-        self.cmb_ui_select = QComboBox(self)
-        qcmb_box_populate(self.cmb_ui_select, self.cmb_ui_select_items,
-                          self.cmb_ui_select_init)
+        # This frame is a placeholder that is filled with content in Plot_Impz()
+        self.frm_file_io = QFrame(self)
+        self.frm_file_io.setContentsMargins(0, 0, 0, 0)
+        self.frm_file_io.setEnabled(False)
 
         self.lbl_stim_cmplx_warn = QLabel(self)
         self.lbl_stim_cmplx_warn = QLabel(to_html("Cmplx!", frmt='b'), self)
@@ -289,16 +282,13 @@ class PlotImpz_UI(QWidget):
         layH_ctrl_run.addWidget(self.cmb_sim_select)
         layH_ctrl_run.addWidget(self.prg_wdg)
         layH_ctrl_run.addSpacing(10)
+        layH_ctrl_run.addWidget(self.lbl_N_frame)
+        layH_ctrl_run.addWidget(self.led_N_frame)
         layH_ctrl_run.addWidget(self.lbl_N_start)
         layH_ctrl_run.addWidget(self.led_N_start)
         layH_ctrl_run.addWidget(self.lbl_N_points)
         layH_ctrl_run.addWidget(self.led_N_points)
-        layH_ctrl_run.addWidget(self.lbl_N_frame)
-        layH_ctrl_run.addWidget(self.led_N_frame)
-
-        layH_ctrl_run.addSpacing(20)
-        layH_ctrl_run.addWidget(self.lbl_ui_select)
-        layH_ctrl_run.addWidget(self.cmb_ui_select)
+        layH_ctrl_run.addWidget(self.frm_file_io)
         layH_ctrl_run.addSpacing(5)
         layH_ctrl_run.addWidget(self.lbl_stim_cmplx_warn)
         layH_ctrl_run.addSpacing(20)
@@ -572,9 +562,9 @@ class PlotImpz_UI(QWidget):
         self.but_freq_norm_impz = QPushButtonRT(text="<b><i>E<sub>X</sub></i> = 1</b>",
                                                 margin=5)
         self.but_freq_norm_impz.setToolTip(
-            "<span>Normalize the FFT of the stimulus with <i>N<sub>FFT</sub></i> for "
-            "<i>E<sub>X</sub></i> = 1. For a dirac pulse, this yields "
-            "|<i>Y(f)</i>| = |<i>H(f)</i>|. DC and Noise need to be "
+            "<span>Normalize the FFT of an impulse stimulus with <i>N<sub>FFT</sub></i> "
+            "to an energy <i>E<sub>X</sub></i> = 1. For a dirac pulse, this yields "
+            "|<i>Y(f)</i>| = |<i>H(f)</i>|. DC, Noise and file I/O need to be "
             "turned off, window should be <b>Rectangular</b>.</span>")
         self.but_freq_norm_impz.setCheckable(True)
         self.but_freq_norm_impz.setChecked(True)
@@ -691,7 +681,7 @@ class PlotImpz_UI(QWidget):
         self.N_user = safe_eval(self.led_N_points.text(), self.N_user,
                                 return_type='int', sign='poszero')
 
-        if N_end > 0:  # total number of data points was specified, e.g. for file I/O
+        if N_end > 0:  # total number of data points was specified, e.g. from file I/O
             if N_end <= self.N_start:
                 logger.warning(
                     f"Total number of data points must be {N_end} > "
@@ -702,6 +692,7 @@ class PlotImpz_UI(QWidget):
             self.N_end = N_end
             # calculate number of data points to be plotted
             self.N = self.N_end - self.N_start
+            self.led_N_points.setText(str(self.N))  # update widget
         else:
             if self.N_user == 0:  # automatic calculation
                 self.N = self.calc_n_points(self.N_user)
