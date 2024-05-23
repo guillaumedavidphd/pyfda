@@ -47,8 +47,10 @@ class IIR_DF1_pyfixp(object):
 
         logger.info("Instantiating filter")
         # create various quantizers and initialize / reset them
-        self.Q_b = fx.Fixed(self.p['QCB'])  # transversal coeffs.
         self.Q_a = fx.Fixed(self.p['QCA'])  # recursive coeffs
+        self.Q_b = fx.Fixed(self.p['QCB'])  # transversal coeffs.
+        self.Q_mul_a = fx.Fixed(self.p['QACC'].copy())  # partial products a y
+        self.Q_mul_b = fx.Fixed(self.p['QACC'].copy())  # partial products b x
         self.Q_mul = fx.Fixed(self.p['QACC'].copy())  # partial products
         self.Q_acc = fx.Fixed(self.p['QACC'])  # accumulator
         self.Q_O = fx.Fixed(self.p['QO'])  # output
@@ -86,21 +88,45 @@ class IIR_DF1_pyfixp(object):
         -------
         None.
         """
+        # Do not initialize filter unless fixpoint mode is active
+        if not fb.fil[0]['fx_sim']:
+            return
+
         self.p = p  # update parameter dictionary with coefficients etc.
 
-        q_mul = p['QACC'].copy()
-
         # update the quantizers
-        self.Q_b.set_qdict(self.p['QCB'])  # transversal coeffs.
-        self.Q_a.set_qdict(self.p['QCA'])  # recursive coeffs
-        self.Q_mul.set_qdict(q_mul)  # partial products
+        self.Q_a.set_qdict(self.p['QCA'])  # recursive coeffs (a)
+        self.Q_b.set_qdict(self.p['QCB'])  # transversal b coeffs (b)
         self.Q_acc.set_qdict(self.p['QACC'])  # accumulator
         self.Q_O.set_qdict(self.p['QO'])  # output
+
+        # Quantizer dict for partial products yq * aq
+        DW_a = int(np.ceil(np.log2(len(self.p['QCA']))))  # word growth
+        # word format for sum of partial products a_i * y_i
+        self.Q_mul_a.set_qdict(
+            {'WI': self.p['QO']['WI'] + self.p['QCA']['WI'] + DW_a,
+             'WF': self.p['QO']['WF'] + self.p['QCA']['WF']})
+
+        # Quantizer dict for partial products xq * bq
+        DW_b = int(np.ceil(np.log2(len(self.p['QCB']))))  # word growth
+        # word format for sum of partial products b_i * x_i
+        self.Q_mul_b.set_qdict(
+            {'WI': self.p['QI']['WI'] + self.p['QCB']['WI'] + DW_b,
+             'WF': self.p['QI']['WF'] + self.p['QCB']['WF']})
 
         # Quantize coefficients and store them in local attributes
         # This also resets the overflow counters.
         self.a_q = quant_coeffs(fb.fil[0]['ba'][1], self.Q_a, recursive=True)
         self.b_q = quant_coeffs(fb.fil[0]['ba'][0], self.Q_b)
+
+        if np.iscomplexobj(self.a_q):
+            self.a_q = self.a_q.real
+            logger.warning(
+                "Complex fixpoint coefficients a_q are not supported, casting to real.")
+        if np.iscomplexobj(self.b_q):
+            self.b_q = self.b_q.real
+            logger.warning(
+                "Complex fixpoint coefficients b_q are not supported, casting to real.")
 
         self.L = max(len(self.b_q), len(self.a_q))  # filter length = number of taps
 
@@ -129,7 +155,8 @@ class IIR_DF1_pyfixp(object):
         Reset registers and overflow counters of quantizers
         (except for coefficient quant.)
         """
-        self.Q_mul.resetN()
+        self.Q_mul_a.resetN()
+        self.Q_mul_b.resetN()
         self.Q_acc.resetN()
         self.Q_O.resetN()
         self.N_over_filt = 0
@@ -146,8 +173,22 @@ class IIR_DF1_pyfixp(object):
 
         Registers can be initialized by passing `zi_a` and `zi_b`.
 
+        Calculate response by:
+        - append new stimuli `x` to transversal register state `self.zi_b`
+
+        - slide a window with length `len(b)` over `self.zi_b`, starting at position `k`
+          and multiply it with the coefficients `b`, yielding the partial products x*b
+          TODO: Doing this for the last len(x) terms should be enough
+        - do the same `self.zi_a` and coefficients `a`, yielding partial products y*a
+        - quantize the partial products x*b and y*a, yielding xb_q and x_aq
+        - accumulate the quantized partial products and quantize result as `y_q[k]`
+        - insert last output `y_q[k]` into the recursive register `self.zi_a`
+
+          TODO: complex inputs?
+
         Parameters
         ----------
+
         x : array of float or float or None
             input value(s) scaled and quantized according to the setting of `p['QI']`
             - When x is a scalar, calculate impulse response with the
@@ -156,18 +197,30 @@ class IIR_DF1_pyfixp(object):
 
         zi_b : array-like
              initial conditions for transversal registers; when `zi_b == None`,
-             the register contents from the last run are used.
+             register contents from last run are used.
 
         zi_a : array-like
              initial conditions for recursive registers; when `zi_a == None`,
-             the register contents from the last run are used.
+             register contents from last run are used.
 
         Returns
         -------
+
         yq : ndarray
             The quantized input value(s) as an ndarray of np.float64
             and the same shape as `x` resp. `b` or `a`(impulse response).
+
+        zi_b : ndarray
+            The content of the L-1 transversal state registers with the
+            last L-1 input values
+
+        zi_a : ndarray
+            The content of the L-1 recursive state registers with the
+            last L-1 output values
         """
+        qfrmt = fb.fil[0]['qfrmt']
+
+        # if initial conditions `zi_a` or `zi_b` have been given, use them:
         if zi_b is not None:
             if len(zi_b) == self.L - 1:   # use zi_b as it is
                 self.zi_b = zi_b
@@ -188,50 +241,48 @@ class IIR_DF1_pyfixp(object):
 
         # initialize quantized partial products and output arrays
         y_q = xb_q = np.zeros(len(x))
-        xa_q = np.zeros(self.L - 1)
-
-        # Calculate response by:
-        # - feed last output `y_q[k]`` into the recursive register `self.zi_a`
-        # - append new stimuli `x` to transversal register state `self.zi_b`
-        # - slide a window with length `len(b)` over `self.zi`, starting at position `k`
-        #   and multiply it with the coefficients `b`, yielding the partial products x*b
-        #   TODO: Doing this for the last len(x) terms should be enough
-        # - quantize the partial products x*b and x*a, yielding xb_q and x_aq
-        # - accumulate the quantized partial products and quantize result, yielding y_q[k]
+        ya_q = np.zeros(self.L - 1)
 
         self.zi_b = np.concatenate((self.zi_b, x))
 
+        # logger.warning(f"a_q = \n{self.a_q}\nb_q = \n{self.b_q}\nx= {x}\n")
+
         for k in range(len(x)):
-            # partial products xa_q and xb_q at time k, quantized with Q_mul:
-            xb_q = self.Q_mul.fixp(self.zi_b[k:k + len(self.b_q)] * self.b_q)
-            # append a zero to xa_q to equalize length of xb_q and xa_q
-            xa_q = np.append(self.Q_mul.fixp(self.zi_a * self.a_q[1:]), 0)
+            # calculate partial products xb_q and ya_q at time k and quantize them
+            # with Q_mul_b resp. Q_mul_a:
+            xb_q = self.Q_mul_b.fixp(self.zi_b[k:k + len(self.b_q)] * self.b_q,
+                                     in_frmt=qfrmt, out_frmt=qfrmt)
 
-            # accumulate partial products x_bq and x_aq and quantize them (Q_acc)
-            # quantize individual accumulation steps - needed?!
-            # y_q[k] = 0.0
-            # for i in range(len(self.b_q)):
-            #     y_q[k] += self.Q_acc.fixp(xb_q[i] - xa_q[i])
+            # append a zero to ya_q to equalize length of xb_q and ya_q
+            ya_q = np.append(self.Q_mul_a.fixp(self.zi_a * self.a_q[1:],
+                                               in_frmt=qfrmt, out_frmt=qfrmt),
+                                               0)
 
-            y_q[k] = self.Q_acc.fixp(np.sum(xb_q) - np.sum(xa_q))
-            self.zi_a[1:] = self.zi_a[:-1]  # shift right by one
-
-            # and insert last output value quantized to output format
-            self.zi_a[0] = self.Q_O.fixp(y_q[k])
-
-            # logger.warning(f"zi_a = {self.zi_a}\n"
-            #                f"zi_b = {self.zi_b}")
+            # - shift right recursive state (output) register
+            # - accumulate partial products `xb_q` and `ya_q`, requantize the results
+            #   to accumulator word formats `Q_acc` and calculate the difference
+            # - requantize the result to output word format `Q_O`
+            # - insert last accumulator value quantized to output format into recursive
+            #   (output) state register
+            self.zi_a[1:] = self.zi_a[:-1]
+            y_q[k] = self.Q_O.requant(
+                (self.Q_acc.requant(np.sum(xb_q), self.Q_mul_b)
+                - self.Q_acc.requant(np.sum(ya_q), self.Q_mul_a)),
+                                self.Q_acc)
+            self.zi_a[0] = y_q[k]
 
         self.zi_b = self.zi_b[-(self.L-1):]  # store last L-1 inputs (i.e. the L-1 registers)
 
         # Overflows in Q_mul are added to overflows in Q_Acc, then Q_mul is reset
-        if self.Q_acc.q_dict['N_over'] > 0 or self.Q_mul.q_dict['N_over'] > 0:
-            logger.warning(f"Overflows: N_Acc = {self.Q_acc.q_dict['N_over']}, "
-                           f"N_Mul = {self.Q_mul.q_dict['N_over']}")
-        self.Q_acc.q_dict['N_over'] += self.Q_mul.q_dict['N_over']
-        self.Q_mul.resetN()
+        if self.Q_acc.N_over > 0 or self.Q_mul_a.N_over > 0 or self.Q_mul_b.N_over > 0:
+            logger.warning(f"Overflows: N_Acc = {self.Q_acc.N_over}, "
+                           f"N_Mul_a = {self.Q_mul_a.N_over}, "
+                           f"N_Mul_b = {self.Q_mul_b.N_over}.")
+        self.Q_acc.N_over += self.Q_mul_a.N_over + self.Q_mul_b.N_over
+        self.Q_mul_a.resetN()
+        self.Q_mul_b.resetN()
 
-        return self.Q_O.fixp(y_q[:len(x)]), self.zi_b, self.zi_a
+        return y_q[:len(x)], self.zi_b, self.zi_a
 
 
 # ------------------------------------------------------------------------------
@@ -240,16 +291,22 @@ if __name__ == '__main__':
     Run widget standalone with
     `python -m pyfda.fixpoint_widgets.iir_df1.iir_df1_pyfixp`
     """
-
-    p = {'b': [-0.2, 0.2, 0], 'QACC': {'Q': '3.6', 'ovfl': 'wrap', 'quant': 'round'},
-         'a': [1, 0, -0.81],
-         'QI': {'Q': '1.3', 'ovfl': 'sat', 'quant': 'round'},
-         'QO': {'Q': '3.3', 'ovfl': 'sat', 'quant': 'round'}
+    p = {'QCB': {'WI': 0, 'WF': 5, 'w_a_m': 'a',
+                'ovfl': 'wrap', 'quant': 'floor', 'N_over': 0},
+        'QCA': {'WI': 1, 'WF': 5, 'w_a_m': 'a',
+                'ovfl': 'wrap', 'quant': 'floor', 'N_over': 0},
+         'QACC': {'WI': 4, 'WF': 3, 'ovfl': 'wrap', 'quant': 'round'},
+         'QI': {'WI': 2, 'WF': 3, 'ovfl': 'sat', 'quant': 'round'},
+         'QO': {'WI': 5, 'WF': 3, 'ovfl': 'wrap', 'quant': 'round'}
          }
+
     dut = IIR_DF1_pyfixp(p)
+    print("Filter fixpoint response and state variables for input =")
+    print("x = (1, 0, 0, 0, 0)")
     x = np.zeros(5)
     x[0] = 1
     y = dut.fxfilter(x=x)
     print(y)
+    print("\nfollowed by x = np.zeros(5):")
     y = dut.fxfilter(x=np.zeros(5))
     print(y)

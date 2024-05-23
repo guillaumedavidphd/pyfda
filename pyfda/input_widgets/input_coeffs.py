@@ -18,9 +18,10 @@ import numpy as np
 
 import pyfda.filterbroker as fb  # importing filterbroker initializes all its globals
 from pyfda.libs.pyfda_lib import fil_save, safe_eval, pprint_log
+from pyfda.libs.pyfda_sig_lib import zeros_with_val
 from pyfda.libs.pyfda_qt_lib import (
     qstyle_widget, qset_cmb_box, qget_cmb_box, qget_selected)
-from pyfda.libs.pyfda_io_lib import qtable2text, qtext2table, save_data_csv
+from pyfda.libs.pyfda_io_lib import qtable2csv, data2array, export_fil_data
 from pyfda.libs.csv_option_box import CSV_option_box
 
 from pyfda.pyfda_rc import params
@@ -30,8 +31,6 @@ from .input_coeffs_ui import Input_Coeffs_UI
 import logging
 logger = logging.getLogger(__name__)
 
-# TODO: implement checking for complex-valued filters somewhere (pyfda_lib?),
-#       h[n] detects complex data (although it isn't)
 # TODO: Fixpoint coefficients do not properly convert complex -> float when saving
 #       the filter?
 # TODO: This ItemDelegate method displayText is called again and again when an
@@ -73,8 +72,8 @@ class ItemDelegate(QStyledItemDelegate):
         super(ItemDelegate, self).__init__(parent)
         self.parent = parent  # instance of the parent (not the base) class
         # handles to quantization objects (fx.Fixed() instance) of coefficient widgets
-        self.QObj = [self.parent.ui.wdg_wq_coeffs_b.QObj,
-                     self.parent.ui.wdg_wq_coeffs_a.QObj]
+        self.Q = [self.parent.ui.wdg_wq_coeffs_b.Q,
+                     self.parent.ui.wdg_wq_coeffs_a.Q]
 
 # ==============================================================================
 #     def paint(self, painter, option, index):
@@ -98,7 +97,7 @@ class ItemDelegate(QStyledItemDelegate):
 #             super(ItemDelegate, self).paint(painter, option, index)
 #             #painter.restore()
 # ----------------------------------
-#         logger.debug("Ovr_flag:".format(self.parent.self.QObj[0].ovr_flag))
+#         logger.debug("Ovr_flag:".format(self.parent.self.Q[0].ovr_flag))
 #         #option.backgroundBrush = QBrush(QColor(000, 100, 100, 200)) # lightGray
 #             #option.backgroundBrush.setColor(QColor(000, 100, 100, 200))
 #         # continue with the original `paint()` method
@@ -131,36 +130,33 @@ class ItemDelegate(QStyledItemDelegate):
             super(ItemDelegate, self).initStyleOption(option, index)
 
     # -------------------------------------------------------------------------
-    # def text(self, item):
-    #     """
-    #     Return item text as string transformed by self.displayText()
+    def text(self, item) -> str:
+        """
+        Return item text as string transformed by self.displayText()
 
-    #     Used a.o. in `libs.pyfda_fix_lib` as `text += table.itemDelegate().text(item)`
-
-    #     TODO: Still needed?
-    #     """
-    #     dtext = str(self.displayText(item.text(), QtCore.QLocale()))
-    #     # logger.warning(f"dtext={dtext}")
-    #     return dtext
+        This is used a.o. by `pyfda_io_lib.qtable2csv()` and  `libs.pyfda_fix_lib`
+        to read out a table in text mode, e.g. `text = table.itemDelegate().text(item)`
+        """
+        return str(self.displayText(item.text(), QtCore.QLocale()))
 
     # -------------------------------------------------------------------------
-    def displayText(self, text, locale):
+    def displayText(self, text, locale) -> str:
         """
         Display `text` with selected fixpoint base and number of places
 
         text:   string / QVariant from QTableWidget to be rendered
         locale: locale for the text
 
-        The instance parameter `QObj[c].ovr_flag` is set to +1 or -1 for
+        The instance parameter `Q[c].ovr_flag` is set to +1 or -1 for
          positive / negative overflows, else it is 0.
         """
 
-        if fb.fil[0]['fxqc']['QCB']['fx_base'] == 'float':
+        if not fb.fil[0]['fx_sim']:
             data = safe_eval(text, return_type='auto')  # convert to float
             return "{0:.{1}g}".format(data, params['FMT_ba'])
 
-        elif fb.fil[0]['fxqc']['QCB']['fx_base'] == 'dec':
-            return "{0:>{1}}".format(text, self.QObj[0].q_dict['places'])
+        elif fb.fil[0]['fx_base'] == 'dec':
+            return "{0:>{1}}".format(text, self.Q[0].places)
 
         else:
             return text
@@ -194,25 +190,30 @@ class ItemDelegate(QStyledItemDelegate):
         editor: instance of e.g. QLineEdit
         index:  instance of QModelIndex
         """
-        data_str = str(safe_eval(self.parent.ba[index.column()][index.row()],
-                                 return_type="auto"))
-        if self.QObj[index.column()].q_dict['fx_base'] == 'float':
-            # floating point format: pass data with full resolution
-            editor.setText(data_str)
-        else:
+        data = safe_eval(self.parent.ba[index.column()][index.row()],
+                         return_type="auto")
+
+        if fb.fil[0]['fx_sim']:
             # fixpoint format with base:
             # pass requantized data with required number of decimal places
             editor.setText(
-                "{0:>{1}}".format(self.QObj[index.column()].float2frmt(data_str),
-                                  self.QObj[index.column()].q_dict['places']))
+                "{0:>{1}}".format(self.Q[index.column()].float2frmt(data),
+                                  self.Q[index.column()].places))
+        else:
+            # floating point format: pass data with full resolution
+            editor.setText(str(data))
 
     # -------------------------------------------------------------------------
-    def setModelData(self, editor, model, index):
+    def setModelData(self, editor, model, index) -> None:
         """
-        When editor has finished, read the updated data from the editor,
-        convert it back to floating point format and store it in both the model
-        (= QTableWidget) and in self.ba_q. Finally, refresh the table item to
-        display it in the selected format (via `float2frmt()`).
+        When editing has finished, read the updated data from the editor (= QTableWidget),
+        and store it in `self.ba` as float / complex for `fb.fil[0]['fx_sim'] == False`.
+
+        For all other formats, convert data back to floating point format via
+        `frmt2float()` and store it in `self.ba` as float / complex. Next, use
+        `float2frmt()` to quantize data and and store it in `parent.ba_q`.
+        Finally, refresh the table item to display it in the selected format via
+        `_refresh_table_item()`.
 
         editor: instance of e.g. QLineEdit
         model:  instance of QAbstractTableModel
@@ -226,27 +227,31 @@ class ItemDelegate(QStyledItemDelegate):
 #            model.setData(index, editor.currentText())
 #        else:
 #            super(ItemDelegate, self).setModelData(editor, model, index)
-        if self.QObj[index.column()].q_dict['fx_base'] == 'float':
+        if not fb.fil[0]['fx_sim']:
             data = safe_eval(
                 str(editor.text()), self.parent.ba[index.column()][index.row()],
-                return_type='auto')  # raw data without fixpoint formatting
-            data_q = data  # TODO: complex data
-        else:   # transform to float
-            data = self.QObj[index.column()].frmt2float(
-                str(editor.text()), self.QObj[index.column()].q_dict['fx_base'])
-            data_q = self.QObj[index.column()].float2frmt(data)
+                return_type='auto')  # raw float data without fixpoint formatting
+            data_q = data
+        else:
+            # fixpoint format: read editor string and transform to float (`data`)
+            # convert `data` to fixpoint format as `data_q`
+            data = self.Q[index.column()].frmt2float(str(editor.text()))
+            data_q = self.Q[index.column()].float2frmt(data)
 
-        # model.setData(index, data)                          # store in QTableWidget
-        # if data is complex, convert whole ba (list of arrays) to complex type
         if isinstance(data, complex):
+            # if data is complex, convert whole column (b or a array) to complex
             self.parent.ba[index.column()] = self.parent.ba[index.column()].astype(complex)
+        if isinstance(data_q, complex):
+            # if data_q is complex, convert whole column (b or a array) to complex
             self.parent.ba_q[index.column()] = self.parent.ba_q[index.column()].astype(complex)
-
         # store new data in self.ba and ba_q
         self.parent.ba[index.column()][index.row()] = data
         self.parent.ba_q[index.column()][index.row()] = data_q
+        # logger.error(f"data_q: {data_q}")
         qstyle_widget(self.parent.ui.butSave, 'changed')
-        self.parent._refresh_table_item(index.row(), index.column())  # refresh table item
+        # this is needed to adapt text width to e.g. complex number representation
+        self.parent.refresh_table()
+        # self.parent._refresh_table_item(index.row(), index.column())  # refresh table item
 
 ###############################################################################
 
@@ -285,8 +290,8 @@ class Input_Coeffs(QWidget):
         self.ui = Input_Coeffs_UI(self)  # create the UI part with buttons etc.
 
         # handles to quantization objects (`fx.Fixed()` instances) of coefficient widgets
-        self.QObj = [self.ui.wdg_wq_coeffs_b.QObj,
-                     self.ui.wdg_wq_coeffs_a.QObj]
+        self.Q = [self.ui.wdg_wq_coeffs_b.Q,
+                     self.ui.wdg_wq_coeffs_a.Q]
 
         self._construct_UI()
 
@@ -295,8 +300,7 @@ class Input_Coeffs(QWidget):
         """
         Process signals coming from sig_rx
         """
-        logger.debug("process_sig_rx(): vis={0}\n{1}"\
-                     .format(self.isVisible(), pprint_log(dict_sig)))
+        # logger.warning(f"SIG_RX: vis={self.isVisible()}\n{pprint_log(dict_sig)}")
 
         if dict_sig['id'] == id(self):
             # logger.warning(f'Stopped infinite loop: "{first_item(dict_sig)}"')
@@ -307,8 +311,8 @@ class Input_Coeffs(QWidget):
             # CSV options have been changed, update icons (file vs. clipboard)
             self.ui._set_load_save_icons()
 
-        elif 'ui_local_changed' in dict_sig and 'wdg_name' in dict_sig and\
-                dict_sig['wdg_name'] in {'wq_coeffs_a', 'wq_coeffs_b'}:
+        elif 'ui_local_changed' in dict_sig and 'sender_name' in dict_sig and\
+                dict_sig['sender_name'] in {'fx_ui_wq_coeffs_a', 'fx_ui_wq_coeffs_b'}:
             # local events from UI, trigger requant and refresh table
             self.refresh_table()
             self.emit({'fx_sim': 'specs_changed'})
@@ -321,7 +325,7 @@ class Input_Coeffs(QWidget):
             if self.fx_specs_changed or\
                     ('fx_sim' in dict_sig and dict_sig['fx_sim'] == 'specs_changed'):
                 # global event, update widget dicts and table
-                self.qdict2ui()
+                self.dict2ui()
                 self.fx_specs_changed = False
         else:
             # TODO: draw wouldn't be necessary for 'view_changed', only update view
@@ -374,10 +378,9 @@ class Input_Coeffs(QWidget):
         # wdg.textChanged() is emitted when contents of widget changes
         # wdg.textEdited() is only emitted for user changes
         # wdg.editingFinished() is only emitted for user changes
-        self.ui.butEnable.clicked.connect(self.refresh_table)
         self.ui.spnDigits.editingFinished.connect(self.refresh_table)
 
-        self.ui.butFromTable.clicked.connect(self._export)
+        self.ui.butFromTable.clicked.connect(self.export_table)
         self.ui.butToTable.clicked.connect(self._import)
 
         self.ui.cmbFilterType.currentIndexChanged.connect(self._filter_type)
@@ -391,8 +394,8 @@ class Input_Coeffs(QWidget):
         self.ui.butSetZero.clicked.connect(self._set_coeffs_zero)
 
         # store new settings and refresh table
-        self.ui.cmb_fx_base.currentIndexChanged.connect(self.fx_base2qdict)
-        self.ui.cmb_q_frmt.currentIndexChanged.connect(self.qfrmt2qdict)
+        self.ui.cmb_fx_base.currentIndexChanged.connect(self.fx_base2dict)
+        self.ui.cmb_qfrmt.currentIndexChanged.connect(self.qfrmt2dict)
 
         self.ui.wdg_wq_coeffs_a.sig_tx.connect(self.process_sig_rx)
         self.ui.wdg_wq_coeffs_b.sig_tx.connect(self.process_sig_rx)
@@ -410,15 +413,17 @@ class Input_Coeffs(QWidget):
         * Reset overflow counters
 
         * Quantize filter coefficients `self.ba` with quantizer objects
-          `self.QObj[0]` and `self.QObj[1]` for `b` and `a` coefficients respectively
+          `self.Q[0]` and `self.Q[1]` for `b` and `a` coefficients respectively
           and store them in the array `self.ba_q`. Depending on the number base
           (float, dec, hex, ...) the result can be of type float or string.
 
         *  Store pos. / neg. overflows in the 3rd and 4th column of `self.ba_q` as
            0 or +/- 1.
         """
-        self.QObj[0].resetN()
-        self.QObj[1].resetN()
+
+        # Reset overflow counters of quantization objects
+        self.Q[0].resetN()
+        self.Q[1].resetN()
 
         if np.isscalar(self.ba[0]) or np.isscalar(self.ba[1]):
             logger.error("No proper filter, coefficients are scalar!")
@@ -427,46 +432,51 @@ class Input_Coeffs(QWidget):
         len_b = len(self.ba[0])
         len_a = len(self.ba[1])
 
-        # Create a copy of the a coefficients without the "1" as this could create
+        # Create a copy of the 'a' coefficients without the "1" as this could create
         # false overflows during quantization. The "1" is always printed though
         # by the `ItemDelegate.initStyleOption()` method
-        #
-        # TODO: Replacing the first element by 0  doesn't work, a is always converted 
-        # to integer for non-dec formats somehwhere - Why???
 
-        # logger.error(f"ba[1]: {self.ba[1].dtype}")
-        a = np.concatenate(([0.123], self.ba[1][1:]))
+        a = np.concatenate(([0.], self.ba[1][1:]))
+        # self.ba[1][0] = 0  # Is this safe?
         # a = self.ba[1]
-        # logger.error(f"a: {a.dtype}")
+        # logger.error(f"a: {a[1].dtype}")
 
-        if fb.fil[0]['fxqc']['QCB']['fx_base'] == 'float':
+        # Float format: Set ba_q = ba, overflows are all = 0
+        if not fb.fil[0]['fx_sim']:
             self.ba_q = [self.ba[0],
                          self.ba[1],
                          np.zeros(len_b),
                          np.zeros(len_a),
                          ]
-        elif fb.fil[0]['fxqc']['QCB']['fx_base'] == 'dec':
+        # Fixpoint decimal format: Print coefficients in numeric format
+        # with a defined number of places
+        elif fb.fil[0]['fx_base'] == 'dec':
             self.ba_q = [
-                ["{0:>{1}}".format(x, self.QObj[0].q_dict['places'])
-                    for x in self.QObj[0].float2frmt(self.ba[0])],
-                ["{0:>{1}}".format(x, self.QObj[0].q_dict['places'])
-                    for x in self.QObj[1].float2frmt(a)],
-                self.QObj[0].q_dict['ovr_flag'],
-                self.QObj[1].q_dict['ovr_flag']
+                ["{0:>{1}}".format(x, self.Q[0].places)
+                    for x in self.Q[0].float2frmt(self.ba[0])],
+                ["{0:>{1}}".format(x, self.Q[1].places)
+                    for x in self.Q[1].float2frmt(a)],
+                self.Q[0].ovr_flag,
+                self.Q[1].ovr_flag
                         ]
+        # Other fixpoint formats: Print coefficients as strings
         else:
             self.ba_q = [
-                self.QObj[0].float2frmt(self.ba[0]),
-                self.QObj[1].float2frmt(a),
-                self.QObj[0].q_dict['ovr_flag'],
-                self.QObj[1].q_dict['ovr_flag']
+                self.Q[0].float2frmt(self.ba[0]),
+                self.Q[1].float2frmt(a),
+                self.Q[0].ovr_flag,
+                self.Q[1].ovr_flag
                         ]
-        self.ui.wdg_wq_coeffs_b.update_disp()
-        self.ui.wdg_wq_coeffs_a.update_disp()
+        # convert self.ba_q to list of arrays for easier handling
+        self.ba_q = [np.asarray(self.ba_q[i]) for i in range(4)]
+        self.ui.wdg_wq_coeffs_b.update_ovfl_cnt()
+        self.ui.wdg_wq_coeffs_a.update_ovfl_cnt()
 
 # ------------------------------------------------------------------------------
     def quant_coeffs_save(self):
         """
+        Triggered by pushing "Quantize button":
+
         - Store selected / all quantized coefficients in `self.ba`
         - Refresh table (for the case that anything weird happens during quantization)
         - Reset Overflow flags `self.ba_q[2]` and `self.ba_q[3]`
@@ -475,10 +485,9 @@ class Input_Coeffs(QWidget):
         """
         idx = qget_selected(self.tblCoeff)['idx']  # get all selected indices
         # returns e.g. [[0, 0], [0, 6]]
-
         if not idx:  # nothing selected, quantize all elements
-            self.ba[0] = self.QObj[0].frmt2float(self.ba_q[0])
-            self.ba[1] = self.QObj[1].frmt2float(self.ba_q[1])
+            self.ba[0] = self.Q[0].frmt2float(self.ba_q[0])
+            self.ba[1] = self.Q[1].frmt2float(self.ba_q[1])
             self.ba_q[2] = np.zeros(len(self.ba_q[0]))
             self.ba_q[3] = np.zeros(len(self.ba_q[1]))
             # idx = [[j, i] for i in range(self.num_rows) for j in range(self.num_cols)]
@@ -488,7 +497,7 @@ class Input_Coeffs(QWidget):
             except ValueError:
                 pass
             for i in idx:
-                self.ba[i[0]][i[1]] = self.QObj[i[0]].frmt2float(self.ba_q[i[0]][i[1]])
+                self.ba[i[0]][i[1]] = self.Q[i[0]].frmt2float(self.ba_q[i[0]][i[1]])
                 self.ba_q[i[0] + 2][i[1]] = 0
 
         self.refresh_table()
@@ -545,11 +554,11 @@ class Input_Coeffs(QWidget):
         brush.setColor(QColor(255, 255, 255, 0))  # transparent white
 
         if self.ba_q[col + 2][row] > 0:
-            # Color item backgrounds with pos. Overflows red
+            # Color item backgrounds with pos. overflows in red
             brush.setColor(QColor(100, 0, 0, 80))
 
         elif self.ba_q[col + 2][row] < 0:
-            # Color item backgrounds with neg. Overflows blue
+            # Color item backgrounds with neg. overflows in blue
             brush.setColor(QColor(0, 0, 100, 80))
 
         item.setTextAlignment(Qt.AlignRight | Qt.AlignCenter)
@@ -562,7 +571,7 @@ class Input_Coeffs(QWidget):
         i.e. requantize displayed values (not `self.ba`) and overflow counters.
 
         Refresh the table from it. Data is displayed via `ItemDelegate.displayText()` in
-        the number format set by `self.q_dict['fx_base']`.
+        the number format set by `fb.fil[0]['fx_base']`.
 
         - self.ba[0] -> b coefficients
         - self.ba[1] -> a coefficients
@@ -574,7 +583,7 @@ class Input_Coeffs(QWidget):
         Called at the end of nearly every method.
         """
         params['FMT_ba'] = int(self.ui.spnDigits.text())
-        # quantize coefficient display and update overflow counter
+        # update quantized coefficient display and overflow counter
         self.quant_coeffs_view()
         if np.ndim(self.ba) == 1 or fb.fil[0]['ft'] == 'FIR':
             self.num_rows = len(self.ba[0])
@@ -582,257 +591,263 @@ class Input_Coeffs(QWidget):
             self.num_rows = max(len(self.ba[1]), len(self.ba[0]))
 
         # When format is 'float', disable all fixpoint options and widgets:
-        is_float = (qget_cmb_box(self.ui.cmb_fx_base, data=False).lower() == 'float')
+        is_float = (qget_cmb_box(self.ui.cmb_qfrmt) == 'float')
         self.ui.spnDigits.setVisible(is_float)  # select number of float digits
         self.ui.lblDigits.setVisible(is_float)
-        self.ui.frm_q_frmt.setVisible(not is_float)  # hide quantization widgets
+        self.ui.cmb_fx_base.setVisible(not is_float)  # hide fx base combobosx
+        self.ui.but_quant.setVisible(not is_float)  # hide quantization button
 
         # hide all q-settings for float
         self.ui.wdg_wq_coeffs_b.setVisible(not is_float)
 
-        if self.ui.butEnable.isChecked():
-            self.ui.butEnable.setIcon(QIcon(':/circle-check.svg'))
-            self.ui.frm_buttons_coeffs.setVisible(True)
-            self.tblCoeff.setVisible(True)
-
-            # check whether filter is FIR and only needs one column
-            if fb.fil[0]['ft'] == 'FIR':
-                self.num_cols = 1
-                self.tblCoeff.setColumnCount(1)
-                self.tblCoeff.setHorizontalHeaderLabels(["b"])
-                qset_cmb_box(self.ui.cmbFilterType, 'FIR')
-                self.ui.wdg_wq_coeffs_a.setVisible(False)  # always hide a coeffs for FIR
-            else:
-                self.num_cols = 2
-                self.tblCoeff.setColumnCount(2)
-                self.tblCoeff.setHorizontalHeaderLabels(["b", "a"])
-                qset_cmb_box(self.ui.cmbFilterType, 'IIR')
-                # hide all q-settings for float:
-                self.ui.wdg_wq_coeffs_a.setVisible(not is_float)
-
-                self.ba[1][0] = 1.0  # restore a[0] = 1 of denominator polynome
-
-            self.tblCoeff.setRowCount(self.num_rows)
-            self.tblCoeff.setColumnCount(self.num_cols)
-            # Create strings for index column (vertical header), starting with "0"
-            idx_str = [str(n) for n in range(self.num_rows)]
-            self.tblCoeff.setVerticalHeaderLabels(idx_str)
-            # ----------------------------------
-            self.tblCoeff.blockSignals(True)
-
-            for col in range(self.num_cols):
-                for row in range(self.num_rows):
-                    self._refresh_table_item(row, col)
-
-            # make a[0] selectable but not editable
-            if fb.fil[0]['ft'] == 'IIR':
-                item = self.tblCoeff.item(0, 1)
-                item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
-                item.setFont(self.ui.bfont)
-
-            self.tblCoeff.blockSignals(False)
-            # ---------------------------------
-            self.tblCoeff.resizeColumnsToContents()
-            self.tblCoeff.resizeRowsToContents()
-            self.tblCoeff.clearSelection()
-
+        # check whether filter is FIR and only needs one column
+        if fb.fil[0]['ft'] == 'FIR':
+            self.num_cols = 1
+            self.tblCoeff.setColumnCount(1)
+            self.tblCoeff.setHorizontalHeaderLabels(["b"])
+            qset_cmb_box(self.ui.cmbFilterType, 'FIR')
+            self.ui.wdg_wq_coeffs_a.setVisible(False)  # always hide a coeffs for FIR
         else:
-            self.ui.frm_buttons_coeffs.setVisible(False)
-            self.ui.butEnable.setIcon(QIcon(':/circle-x.svg'))
-            self.tblCoeff.setVisible(False)
+            self.num_cols = 2
+            self.tblCoeff.setColumnCount(2)
+            self.tblCoeff.setHorizontalHeaderLabels(["b", "a"])
+            qset_cmb_box(self.ui.cmbFilterType, 'IIR')
+            # hide all q-settings for float:
+            self.ui.wdg_wq_coeffs_a.setVisible(not is_float)
+
+            self.ba[1][0] = 1.0  # restore a[0] = 1 of denominator polynome
+
+        self.tblCoeff.setRowCount(self.num_rows)
+        self.tblCoeff.setColumnCount(self.num_cols)
+        # Create strings for index column (vertical header), starting with "0"
+        idx_str = [str(n) for n in range(self.num_rows)]
+        self.tblCoeff.setVerticalHeaderLabels(idx_str)
+        # ----------------------------------
+        self.tblCoeff.blockSignals(True)
+
+        for col in range(self.num_cols):
+            for row in range(self.num_rows):
+                self._refresh_table_item(row, col)
+
+        # make a[0] selectable but not editable
+        if fb.fil[0]['ft'] == 'IIR':
+            item = self.tblCoeff.item(0, 1)
+            item.setFlags(Qt.ItemIsSelectable | Qt.ItemIsEnabled)
+            item.setFont(self.ui.bfont)
+
+        self.tblCoeff.blockSignals(False)
+        # ---------------------------------
+        self.tblCoeff.resizeColumnsToContents()
+        self.tblCoeff.resizeRowsToContents()
+        self.tblCoeff.clearSelection()
 
     # --------------------------------------------------------------------------
     def load_dict(self):
         """
-        Create a reference from filter dict `fb.fil[0]['ba']` to the coefficient list
-        `self.ba` and update the display via `self.refresh_table()`.
+        - Copy filter dict array `fb.fil[0]['ba']` to the coefficient list `self.ba`
+        - Set quantization UI from dict, update quantized coeff. display / overflow
+          counter
+        - Update the display via `self.refresh_table()`.
 
         The filter dict is a "normal" 2D-numpy float array for the b and a coefficients
         while the coefficient list `self.ba` is a list of two float ndarrays to allow
         for different lengths of b and a subarrays while adding / deleting items.
         """
-        self.ba = [fb.fil[0]['ba'][0], fb.fil[0]['ba'][1]]  # list of two arrays
+        self.ba = list(fb.fil[0]['ba']).copy()
 
-        self.qdict2ui()  # set quantization UI from dictionary
-
-        self.refresh_table()
+        # set quantization UI from dictionary, update quantized coeff. display and
+        # overflow counter, and refresh table
+        self.dict2ui()
 
         qstyle_widget(self.ui.butSave, 'normal')
 
-    # # --------------------------------------------------------------------------
-    # def _copy_options(self):
-    #     """
-    #     Set options for copying to/from clipboard or file.
-    #     """
-    #     self.opt_widget = CSV_option_box(self)  # Handle must be class attribute!
-    #     # self.opt_widget.show() # modeless dialog, i.e. non-blocking
-    #     self.opt_widget.exec_()  # modal dialog (blocking)
 
     # --------------------------------------------------------------------------
-    def _export(self):
+    def export_table(self):
         """
         Export data from coefficient table `self.tblCoeff` to clipboard / file in
         CSV format.
         """
-        if not params['CSV']['cmsis']:
-            qtable2text(self.tblCoeff, self.ba, self, 'ba', self.QObj[0].q_dict['fx_base'],
-                        title="Export Filter Coefficients")
-        elif fb.fil[0]['ft'] != 'IIR':
-            logger.warning("CMSIS SOS export is only possible for IIR filters!")
+        text = qtable2csv(
+            self.tblCoeff, self.ba, formatted=self.ui.but_format.isChecked())
+        if params['CSV']['destination'] == 'clipboard':
+            # clipboard is selected as export target
+            fb.clipboard.setText(text)
         else:
-            # Get coefficients in SOS format and delete 4th column containing the
-            # '1.0' of the recursive parts:
-            sos_coeffs = np.delete(fb.fil[0]['sos'], 3, 1)
-            # TODO: check `scipy.signal.zpk2sos` for details concerning sos paring
+            # pass csv formatted text, key for accessing data in ``*.npz`` file or
+            # Matlab workspace (``*.mat``) and a title for the file export dialog
+            export_fil_data(self, text, 'ba', title="Export Filter Coefficients")
 
-            delim = params['CSV']['delimiter'].lower()
-            if delim == 'auto':  # 'auto' doesn't make sense when exporting
-                delim = ","
-            cr = params['CSV']['lineterminator']
+        # elif fb.fil[0]['ft'] != 'IIR':
+        #     logger.warning("CMSIS SOS export is only possible for IIR filters!")
+        # else:
+        #     # Get coefficients in SOS format and delete 4th column containing the
+        #     # '1.0' of the recursive parts:
+        #     sos_coeffs = np.delete(fb.fil[0]['sos'], 3, 1)
+        #     # TODO: check `scipy.signal.zpk2sos` for details concerning sos paring
 
-            text = ""
-            for r in range(np.shape(sos_coeffs)[0]):  # number of rows
-                for c in range(5):  # always has 5 columns
-                    text += str(safe_eval(sos_coeffs[r][c], return_type='auto')) + delim
-                text = text.rstrip(delim) + cr
-            text = text.rstrip(cr)  # delete last CR
+        #     delim = params['CSV']['delimiter'].lower()
+        #     if delim == 'auto':  # 'auto' doesn't make sense when exporting
+        #         delim = ","
+        #     cr = params['CSV']['lineterminator']
 
-            if params['CSV']['clipboard']:
-                fb.clipboard.setText(text)
-            else:
-                save_data_csv(self, text, title="Export in CMSIS DSP SOS format",
-                                file_types=('csv',))
+        #     text = ""
+        #     for r in range(np.shape(sos_coeffs)[0]):  # number of rows
+        #         for c in range(5):  # always has 5 columns
+        #             text += str(safe_eval(sos_coeffs[r][c], return_type='auto')) + delim
+        #         text = text.rstrip(delim) + cr
+        #     text = text.rstrip(cr)  # delete last CR
+
+        #     if params['CSV']['clipboard']:
+        #         fb.clipboard.setText(text)
+        #     else:
+        #         export_fil_data(self, text, title="Export in CMSIS DSP SOS format",
+        #                         file_types=('csv',))
 
     # --------------------------------------------------------------------------
-    def _import(self):
+    def _import(self) -> None:
         """
         Import data from clipboard / file and copy it to `self.ba` as float / cmplx.
 
         Quantize data to `self.ba_q` and refresh table.
 
-        # TODO: More checks for swapped row <-> col, single values, wrong data type ...
+        TODO: More checks for swapped row <-> col, single values, wrong data type ...
         """
+        formatted_import = self.ui.but_format.isChecked()
         # get data as ndarray of str
-        data_str = qtext2table(self, 'ba', title="Import Filter Coefficients")
+        data_str = data2array(self, 'ba', title="Import Filter Coefficients",
+                              as_str = self.ui.but_format.isChecked())
         if data_str is None:  # file operation has been aborted or some other error
+            logger.info(f"Data was not imported.")
             return
 
-        logger.debug(
-            "importing data: dim - shape = {0} - {1} - {2}\n{3}"
-            .format(type(data_str), np.ndim(data_str), np.shape(data_str), data_str))
-
-        frmt = self.QObj[0].q_dict['fx_base']
 
         if np.ndim(data_str) > 1:
             num_cols, num_rows = np.shape(data_str)
             orientation_horiz = num_cols > num_rows  # need to transpose data
+            if min(num_cols, num_rows) > 2:
+                logger.error(
+                    f"Data cannot be imported, its shape is {num_cols} x {num_rows}.")
+                return
         elif np.ndim(data_str) == 1:
             num_rows = len(data_str)
             num_cols = 1
             orientation_horiz = False
         else:
-            logger.error("Imported data is a single value or None.")
-            return None
-        logger.info("_import: c x r = {0} x {1}".format(num_cols, num_rows))
+            logger.error(
+                "Data cannot be imported, it is a single value or None.")
+            return
+
+        self.ba = [[], []]
         if orientation_horiz:
-            self.ba = [[], []]
             for c in range(num_cols):
-                self.ba[0].append(
-                    self.QObj[0].frmt2float(data_str[c][0], frmt))
-                if num_rows > 1:
-                    self.ba[1].append(
-                        self.QObj[1].frmt2float(data_str[c][1], frmt))
+                if formatted_import:
+                    self.ba[0].append(
+                        self.Q[0].frmt2float(data_str[c][0]))
+                    if num_rows > 1:
+                        self.ba[1].append(
+                            self.Q[1].frmt2float(data_str[c][1]))
+                else:
+                    self.ba[0].append(data_str[c][0])
+                    if num_rows > 1:
+                        self.ba[1].append(data_str[c][1])
             if num_rows > 1:
                 self._filter_type(ftype='IIR')
             else:
+                self.ba[1] = zeros_with_val(len(self.ba[0]))
                 self._filter_type(ftype='FIR')
         else:
-            self.ba[0] =\
-                [self.QObj[0].frmt2float(s, frmt) for s in data_str[0]]
+            if formatted_import:
+                self.ba[0] =\
+                    [self.Q[0].frmt2float(s) for s in data_str[0]]
+            else:
+                self.ba[0] = data_str[0]
+            # IIR
             if num_cols > 1:
-                self.ba[1] =\
-                    [self.QObj[1].frmt2float(s, frmt) for s in data_str[1]]
+                if formatted_import:
+                    self.ba[1] =\
+                        [self.Q[1].frmt2float(s) for s in data_str[1]]
+                else:
+                    self.ba[1] = data_str[1]
                 self._filter_type(ftype='IIR')
             else:
-                self.ba[1] = [1]
+                self.ba[1] = zeros_with_val(len(self.ba[0]))
                 self._filter_type(ftype='FIR')
+
+        logger.warning(type(self.ba[0]))
+        logger.warning(self.ba)
 
         self.ba[0] = np.asarray(self.ba[0])
         self.ba[1] = np.asarray(self.ba[1])
 
         self._equalize_ba_length()
         self.refresh_table()
+        logger.info(f"Successfully imported data.")
         qstyle_widget(self.ui.butSave, 'changed')
 
     # --------------------------------------------------------------------------
-    def qdict2ui(self):
+    def dict2ui(self):
         """
-        Set the UI from the quantization dict and update the fixpoint quant. object.
+        - update the UI from the dictionary
+        - Update the fixpoint quant. object
+        - Update the quantized coefficient view and the overflow counter
+        - Refresh the table
 
         Triggered by:
-        - `process_sig_rx()`: self.fx_specs_changed == True or
-                                dict_sig['fx_sim'] == 'specs_changed'
-        - `self.qfrmt2qdict()`
-        - `self.fx_base2qdict()`
 
+        - `process_sig_rx()`: self.fx_specs_changed == True or
+            dict_sig['fx_sim'] == 'specs_changed'
+        - `self.qfrmt2dict()`
+        - `self.fx_base2dict()`
         """
-        if self.ui.wdg_wq_coeffs_b.q_dict['WI'] != 0\
-                and self.ui.wdg_wq_coeffs_b.q_dict['WF'] != 0:
-            qset_cmb_box(self.ui.cmb_q_frmt, 'qfrac', data=True)
+        # update ui
+        if not fb.fil[0]['fx_sim']:  # float mode
+            qset_cmb_box(self.ui.cmb_qfrmt, 'float', data=True)
+        else:  # fixpoint mode
+            qset_cmb_box(self.ui.cmb_qfrmt, fb.fil[0]['qfrmt'], data=True)
 
         # update quantizer objects and widgets
-        self.ui.wdg_wq_coeffs_a.dict2ui()
-        self.ui.wdg_wq_coeffs_b.dict2ui()
+        self.ui.wdg_wq_coeffs_a.dict2ui(fb.fil[0]['fxq']['QCA'])
+        self.ui.wdg_wq_coeffs_b.dict2ui(fb.fil[0]['fxq']['QCB'])
 
-        # qset_cmb_box(self.ui.cmb_q_frmt, self.ui.wdg_wq_coeffs_b.q_dict['qfrmt'])
-        # qset_cmb_box(self.ui.cmb_fx_base, self.ui.wdg_wq_coeffs_b.q_dict['fx_base'])
-
+        # quantize coefficient view according to new settings and update table
+        self.quant_coeffs_view()
         self.refresh_table()
 
 # ------------------------------------------------------------------------------
-    def qfrmt2qdict(self):
+    def qfrmt2dict(self):
         """
-        Read out the UI settings of  `self.ui.cmb_q_frmt` (triggering this method)
-        and store the old 'qfrmt' setting under the 'qfrmt_last' key.
-
-        The coefficient quantization settings are copied to the quantization dicts
-        fb.fil[0]['fxqc']['QCB']` and `...['QCA']` inside the quantization widget
-        instances of `FX_UI_WQ` every time something is updated there. This information
-        is also kept in the quantization objects `QObj` of the quantization widgets.
+        Read out the UI settings of  `self.ui.cmb_qfrmt` (triggering this method)
+        and store it under the 'qfrmt' key if it is a fixpoint format. Set the
+        `fb.fil[0]['fx_sim']` flag accordingly.
 
         Refresh the table and update quantization widgets, finally emit a signal
         `{'fx_sim': 'specs_changed'}`.
         """
-        fb.fil[0]['fxqc']['QCB'].update(
-            {'qfrmt_last': fb.fil[0]['fxqc']['QCB']['qfrmt'],
-             'qfrmt': qget_cmb_box(self.ui.cmb_q_frmt)})
-        fb.fil[0]['fxqc']['QCA'].update(
-            {'qfrmt_last': fb.fil[0]['fxqc']['QCA']['qfrmt'],
-             'qfrmt': qget_cmb_box(self.ui.cmb_q_frmt)})
+        qfrmt = qget_cmb_box(self.ui.cmb_qfrmt)
+        fb.fil[0]['fx_sim'] = (qfrmt != 'float')
+        if qfrmt != 'float':
+            fb.fil[0]['qfrmt'] = qfrmt
 
-        # update quant. widgets and table with the new `qfrmt` settings
-        self.qdict2ui()
+        # update quant. widgets and table with the new `qfrmt` settings and propagate
+        # change in fixpoint settings to other widgets
+        self.dict2ui()
         self.emit({'fx_sim': 'specs_changed'})
 
 # ------------------------------------------------------------------------------
-    def fx_base2qdict(self):
+    def fx_base2dict(self):
         """
         Read out the UI settings of `self.ui.cmb_fx_base` (triggering this method)
-        which specifies the number base (dec, bin, ...)
-
-        The coefficient quantization settings are copied to the quantization dicts
-        fb.fil[0]['fxqc']['QCB']` and `...['QCA']` inside the quantization widget
-        instances of `FX_UI_WQ` every time something is updated there. This information
-        is also kept in the quantization objects `QObj` of the quantization widgets.
+        which specifies the fx number base (dec, bin, ...) for display
+        and store it in `fb.fil[0]['fx_base']`.
 
         Refresh the table and update quantization widgets. Don't emit a signal
         because this only influences the view not the data itself.
         """
-        fb.fil[0]['fxqc']['QCB'].update({'fx_base': qget_cmb_box(self.ui.cmb_fx_base)})
-        fb.fil[0]['fxqc']['QCA'].update({'fx_base': qget_cmb_box(self.ui.cmb_fx_base)})
+        fb.fil[0]['fx_base'] = qget_cmb_box(self.ui.cmb_fx_base)
 
         # update quant. widgets and table with the new `fx_base` settings
-        self.qdict2ui()
+        self.dict2ui()
 
 # ------------------------------------------------------------------------------
     def _save_dict(self):
@@ -891,13 +906,13 @@ class Input_Coeffs(QWidget):
 
         if D > 0:  # b is longer than a
             self.ba[1] = np.append(self.ba[1], np.zeros(D))
-            self.quant_coeffs_view()
+            # self.quant_coeffs_view()
         elif D < 0:  # a is longer than b
             if fb.fil[0]['ft'] == 'IIR':
                 self.ba[0] = np.append(self.ba[0], np.zeros(-D))
             else:
                 self.ba[1] = self.ba[1][:D]  # discard last D elements of a
-            self.quant_coeffs_view()
+        self.quant_coeffs_view()
 
 # ------------------------------------------------------------------------------
     def _delete_cells(self):
@@ -918,18 +933,20 @@ class Input_Coeffs(QWidget):
             # only complete rows selected or FIR -> delete row
             self.ba = np.delete(self.ba, sel[0], axis=1)
         else:
-            self.ba[0][sel[0]] = 0
-            self.ba[1][sel[1]] = 0
-            # self.ba[0] = np.delete(self.ba[0], sel[0])
-            # self.ba[1] = np.delete(self.ba[1], sel[1])
-        # test and equalize if b and a array have different lengths:
-        self._equalize_ba_length()
-        self.refresh_table()
-        # if length is less than 2, clear the table: this ain't no filter!
-        if len(self.ba[0]) < 2:
-            self.clear_table()  # sets 'changed' attribute
+            # self.ba[0][sel[0]] = 0
+            # self.ba[1][sel[1]] = 0
+            self.ba[0] = np.delete(self.ba[0], sel[0])
+            self.ba[1] = np.delete(self.ba[1], sel[1])
 
-        qstyle_widget(self.ui.butSave, 'changed')
+        # If length is less than 2, re-initialize the table: this ain't no filter!
+        # `_clear_table() also refreshes the table and sets 'changed' attribute
+        if len(self.ba[0]) < 2 and len(self.ba[1]) < 2:
+            self.clear_table()
+        else:
+            # test and equalize if b and a array have different lengths:
+            self._equalize_ba_length()
+            self.refresh_table()
+            qstyle_widget(self.ui.butSave, 'changed')
 
 # ------------------------------------------------------------------------------
     def _add_cells(self):

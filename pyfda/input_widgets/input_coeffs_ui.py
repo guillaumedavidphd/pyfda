@@ -18,7 +18,7 @@ from pyfda.libs.pyfda_lib import to_html
 from pyfda.libs.pyfda_qt_lib import (
     qset_cmb_box, qstyle_widget, qcmb_box_populate, QHLine, PushButton)
 from pyfda.libs.csv_option_box import CSV_option_box
-# from pyfda.libs.pyfda_lib import pprint_log
+from pyfda.libs.pyfda_lib import first_item
 import pyfda.libs.pyfda_dirs as dirs
 from pyfda.fixpoint_widgets.fx_ui_wq import FX_UI_WQ
 from pyfda.pyfda_rc import params
@@ -41,34 +41,30 @@ class Input_Coeffs_UI(QWidget):
         self.eps = 1.e-6  # initialize tolerance value
 
         self.cmb_q_frmt_items = [
-            "<span>Quantization format for signed fixpoint coefficients (affects only "
+            "<span>Quantization format for coefficients (affects only "
             "the display, not the stored values).</span>",
-            # ("float", "Float", "<span>Coefficients with full precision in floating "
-            # "point format</span>"),
-            ("qint", "Integer", "<span>Integer format with <i>WI</i> + 1 bits "
+            ('float', "Float", "<span>Full precision floating point format</span>"),
+            ('qint', "Integer", "<span>Integer format with <i>WI</i> + 1 bits "
              "(range -2<sup>WI</sup> ... 2<sup>WI</sup> - 1)</span>"),
-            ("qfrac", "Fractional",
+            ('qfrac', "Fractional",
              "<span>General fractional format with <i>WI</i> + <i>WF</i> + 1 bits "
-             "(range -2<sup>WI</sup> ... 2<sup>WI</sup> - 2<sup>WF</sup>).</span>"),
-            ("qnfrac", "Norm. Frac.",
-             "<span>Normalized fractional format with <i>WF</i> + 1 bits "
-             "(range -1 ... +1 - 2<sup>WF</sup>).</span>"),
-            ("q31", "Q31", "<span>Normalized fractional format with 32 bits "
-             "(31 fractional bits).</span>")
+             "(range -2<sup>WI</sup> ... 2<sup>WI</sup> - 2<sup>WF</sup>).</span>")
             ]
-        self.cmb_q_frmt_default = "qfrac"
+        self.cmb_q_frmt_default = "float"
 
         self.cmb_fx_base_items = [
-            "<span>Select the coefficient display format.</span>",
-            ("float", "Float", "<span>Coefficients with full precision in floating "
-             "point format</span>"),
-            ("dec", "Dec", "<span>Fixpoint coefficients in decimal format</span>"),
-            ("hex", "Hex", "<span>Fixpoint coefficients in hexadecimal format</span>"),
-            ("bin", "Bin", "<span>Fixpoint coefficients in binary format</span>"),
-            ("csd", "CSD", "<span>Fixpoint coefficients in Canonically Signed Digit "
+            "<span>Select the coefficient fixpoint display format.</span>",
+            # ("float", "Float", "<span>Coefficients with full precision in floating "
+            # "point format</span>"),
+            ('dec', "Dec", "<span>Fixpoint coefficients in decimal format</span>"),
+            ('hex', "Hex", "<span>Fixpoint coefficients in hexadecimal format</span>"),
+            ('bin', "Bin", "<span>Fixpoint coefficients in binary format</span>"),
+            ('oct', "Oct", "<span>Fixpoint coefficients in octal format</span>"),
+            ('csd', "CSD", "<span>Fixpoint coefficients in Canonically Signed Digit "
              "(ternary logic) format</span>")
             ]
-        self.cmb_fx_base_default = "float"
+        self.cmb_fx_base_default = "dec"
+
         self._construct_UI()
 
 # ------------------------------------------------------------------------------
@@ -76,14 +72,20 @@ class Input_Coeffs_UI(QWidget):
         """
         Process signals coming from the CSV pop-up window
         """
-        # logger.debug("PROCESS_SIG_RX:\n{0}".format(pprint_log(dict_sig)))
-
-        if 'closeEvent' in dict_sig:
+        # logger.warning("PROCESS_SIG_RX:\n{0}".format(pprint_log(dict_sig)))
+        if dict_sig['id'] == id(self):
+            # this should not happen as the rx slot is not connected globally
+            logger.warning(
+                f'Stopped infinite loop: "{first_item(dict_sig)}"')
+            return
+        elif 'close_event' in dict_sig:
             self._close_csv_win()
+            # send signal that pop-up box is closed
             self.emit({'ui_global_changed': 'csv'})
-        elif 'ui_global_changed' in dict_sig:
+        elif 'ui_global_changed' in dict_sig and dict_sig['ui_global_changed'] == 'csv':
             self._set_load_save_icons()  # update icons file <-> clipboard
-            # set state of CSV options button according to state of CSV popup handle
+            # signal change of CSV options to other widgets with current id
+            self.emit({'ui_global_changed': 'csv'})
 
 # ------------------------------------------------------------------------------
     def _construct_UI(self):
@@ -109,25 +111,15 @@ class Input_Coeffs_UI(QWidget):
         #
         # UI Elements for controlling the display
         # ---------------------------------------------
-        self.butEnable = PushButton(self, icon=QIcon(':/circle-check.svg'), checked=True)
-        q_icon_size = self.butEnable.iconSize()  # <- uncomment this for manual sizing
-        self.butEnable.setToolTip(
-            "<span>Show / hide filter coefficients in an editable table."
-            " For high order systems, table display might be slow.</span>")
+
+        self.cmb_qfrmt = QComboBox(self)
+        qcmb_box_populate(self.cmb_qfrmt, self.cmb_q_frmt_items,
+                          self.cmb_q_frmt_default)
+        self.cmb_qfrmt.setSizeAdjustPolicy(QComboBox.AdjustToContents)
 
         self.cmb_fx_base = QComboBox(self)
         qcmb_box_populate(self.cmb_fx_base, self.cmb_fx_base_items,
                           self.cmb_fx_base_default)
-
-        model = self.cmb_fx_base.model()
-        # create header "Fixpoint:" between separators
-        item = QtGui.QStandardItem('Fixpoint:')
-        item.setData('parent', Qt.AccessibleDescriptionRole)
-        item.setData(0, role=QtGui.QFont.Bold)
-        item.setFlags(item.flags() & Qt.ItemIsEnabled)  # | Qt.ItemIsSelectable))
-        model.insertRow(1, item)
-        self.cmb_fx_base.insertSeparator(1)
-        self.cmb_fx_base.insertSeparator(3)
 
         self.spnDigits = QSpinBox(self)
         self.spnDigits.setRange(0, 16)
@@ -136,35 +128,40 @@ class Input_Coeffs_UI(QWidget):
         self.lblDigits = QLabel("Digits", self)
         self.lblDigits.setFont(self.bifont)
 
-        self.cmb_q_frmt = QComboBox(self)
-        qcmb_box_populate(self.cmb_q_frmt, self.cmb_q_frmt_items,
-                          self.cmb_q_frmt_default)
-        self.cmb_q_frmt.setSizeAdjustPolicy(QComboBox.AdjustToContents)
-
         self.but_quant = QPushButton(self)
         self.but_quant.setToolTip(
             "<span>Quantize selected coefficients / whole table with specified "
             "settings and save to dict. This modifies the data, not only the view."
             "</span>")
         self.but_quant.setIcon(QIcon(':/quantize.svg'))
-        self.but_quant.setIconSize(q_icon_size)
+        # self.but_quant.setIconSize(q_icon_size)
+        q_icon_size = self.but_quant.iconSize()  # <- comment this for manual sizing
         self.but_quant.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
 
-        layH_q_frmt = QHBoxLayout()
-        layH_q_frmt.addWidget(self.cmb_q_frmt)
-        layH_q_frmt.addWidget(self.but_quant)
-        layH_q_frmt.setContentsMargins(5, 0, 0, 0)  # 5 pixels extra left space
-        self.frm_q_frmt = QFrame(self)
-        self.frm_q_frmt.setLayout(layH_q_frmt)
+        self.but_format = QPushButton(QIcon(':/star.svg'), "", self)
+        self.but_format.setToolTip(
+            "<span>Load and save coefficients with the table format when activated, "
+            "i.e. with the selected number of digits, in Hex, Binary etc.</span>"
+            )
+        self.but_format.setIconSize(q_icon_size)
+        self.but_format.setCheckable(True)
+
+        # layH_q_frmt = QHBoxLayout()
+        # layH_q_frmt.addWidget(self.cmb_qfrmt)
+        # layH_q_frmt.addWidget(self.but_quant)
+        # layH_q_frmt.setContentsMargins(5, 0, 0, 0)  # 5 pixels extra left space
+        # self.frm_q_frmt = QFrame(self)
+        # self.frm_q_frmt.setLayout(layH_q_frmt)
 
         layH_display = QHBoxLayout()
         layH_display.setContentsMargins(*params['wdg_margins'])
         layH_display.setAlignment(Qt.AlignLeft)
-        layH_display.addWidget(self.butEnable)
-        layH_display.addWidget(self.cmb_fx_base)
+        layH_display.addWidget(self.cmb_qfrmt)
         layH_display.addWidget(self.spnDigits)
         layH_display.addWidget(self.lblDigits)
-        layH_display.addWidget(self.frm_q_frmt)
+        layH_display.addWidget(self.cmb_fx_base)
+        layH_display.addWidget(self.but_quant)
+        layH_display.addWidget(self.but_format)
         layH_display.addStretch()
 
         self.frm_display = QFrame(self)
@@ -179,8 +176,7 @@ class Input_Coeffs_UI(QWidget):
         #
         # UI Elements for loading / storing / manipulating cells and rows
         # -----------------------------------------------------------------
-        self.cmbFilterType = QComboBox(self)
-        self.cmbFilterType.setObjectName("comboFilterType")
+        self.cmbFilterType = QComboBox(self, objectName="comboFilterType")
         self.cmbFilterType.setToolTip(
             "<span>Select between IIR and FIR filter for manual entry. "
             "Changing the type reloads the filter from the filter dict.</span>")
@@ -210,8 +206,7 @@ class Input_Coeffs_UI(QWidget):
             "<span>Copy coefficient table to filter dict and update all plots "
             "and widgets.</span>")
 
-        self.butLoad = QPushButton(self)
-        self.butLoad.setIcon(QIcon(':/download.svg'))
+        self.butLoad = QPushButton(QIcon(':/download.svg'), "", self)
         self.butLoad.setIconSize(q_icon_size)
         self.butLoad.setToolTip(
             "<span>Reload coefficient table from filter dict.</span>")
@@ -221,15 +216,16 @@ class Input_Coeffs_UI(QWidget):
         self.butClear.setIconSize(q_icon_size)
         self.butClear.setToolTip("Clear all table entries.")
 
+        # Icon and tooltip are switched between file and clipboard,
+        # depending on CSV options in _set_load_save_icons()
         self.butFromTable = QPushButton(self)
         self.butFromTable.setIconSize(q_icon_size)
-
         self.butToTable = QPushButton(self)
         self.butToTable.setIconSize(q_icon_size)
 
         self.but_csv_options = PushButton(self, icon=QIcon(':/settings.svg'),
                                           checked=False)
-        self.but_csv_options.setIconSize(q_icon_size)
+        # self.but_csv_options.setIconSize(q_icon_size)
         self.but_csv_options.setToolTip(
             "<span>Select CSV format and whether "
             "to copy to/from clipboard or file.</span>")
@@ -285,12 +281,12 @@ class Input_Coeffs_UI(QWidget):
 
         # -------------------
         self.wdg_wq_coeffs_b = FX_UI_WQ(
-            fb.fil[0]['fxqc']['QCB'], wdg_name='wq_coeffs_b',
+            fb.fil[0]['fxq']['QCB'], objectName='fx_ui_wq_coeffs_b',
             label='<b>Coeff. Quantization <i>b<sub>I.F&nbsp;</sub></i>:</b>',
             MSB_LSB_vis='max')
         # -------------------
         self.wdg_wq_coeffs_a = FX_UI_WQ(
-            fb.fil[0]['fxqc']['QCA'], wdg_name='wq_coeffs_a',
+            fb.fil[0]['fxq']['QCA'], objectName='fx_ui_wq_coeffs_a',
             label='<b>Coeff. Quantization <i>a<sub>I.F&nbsp;</sub></i>:</b>',
             MSB_LSB_vis='max')
 
@@ -323,11 +319,6 @@ class Input_Coeffs_UI(QWidget):
         """
         Pop-up window for CSV options
         """
-        # if self.but_csv_options.isChecked():
-        #     qstyle_widget(self.but_csv_options, "changed")
-        # else:
-        #     qstyle_widget(self.but_csv_options, "normal")
-
         if dirs.csv_options_handle is None:
             # no handle to the window? Create a new instance
             if self.but_csv_options.isChecked():
@@ -356,32 +347,34 @@ class Input_Coeffs_UI(QWidget):
         Set icons / tooltipps for loading and saving data to / from file or
         clipboard depending on selected options.
         """
-        if params['CSV']['clipboard']:
+        if params['CSV']['destination'] == 'clipboard':
             self.butFromTable.setIcon(QIcon(':/to_clipboard.svg'))
             self.butFromTable.setToolTip(
-                "<span>Copy table to clipboard.<br>For float format, SELECTED items "
-                "are copied as displayed. When nothing is selected, the whole table "
-                "is copied with full precision.</span>")
+                "<span>Copy table to clipboard in float format with full precision "
+                "when the &lt;FORMAT&gt; button is not selected.<br>"
+                "Otherwise, copy the table as displayed.</span>")
 
             self.butToTable.setIcon(QIcon(':/from_clipboard.svg'))
             self.butToTable.setToolTip(
-                "<span>Copy clipboard to table. Table data format (e.g. 'Hex') has to "
-                "match the clipboard data format, otherwise data may be imported "
-                "incorrectly without warning.</span>")
+                "<span>Import clipboard in float format when the &lt;FORMAT&gt; "
+                "button is not selected.<br>"
+                "Otherwise, try to import data in the selected table data format "
+                "(e.g. 'Hex'). If this differs from the clipboard data format, "
+                "imported data may be corrupted.</span>")
         else:
             self.butFromTable.setIcon(QIcon(':/save.svg'))
             self.butFromTable.setToolTip(
-                "<span>"
-                "Save table to file.<br>"
-                "For float format,  SELECTED items are copied as "
-                "displayed. When nothing is selected, the whole table "
-                "is copied with full precision.</span>")
+                "<span>Save table to file in float format with full precision "
+                "when the &lt;FORMAT&gt; button is not selected.<br>"
+                "Otherwise, save the table as displayed.</span>")
 
             self.butToTable.setIcon(QIcon(':/file.svg'))
             self.butToTable.setToolTip(
-                "<span>Load table from file. Table data format (e.g. 'Hex') has to "
-                "match the data format in the file, otherwise data may be imported "
-                "incorrectly without warning.</span>")
+                "<span>Load table from file in float format when the &lt;FORMAT&gt; "
+                "button is not selected.<br>"
+                "Otherwise, try to import data in the selected table data format "
+                "(e.g. 'Hex'). If this differs from the file data format, "
+                "imported data may be corrupted.</span>")
 
         # set state of CSV options button according to state of handle
         self.but_csv_options.setChecked(not dirs.csv_options_handle is None)

@@ -16,16 +16,13 @@ is selected, calling the __init__ method.
 API version info:   
     1.0: initial working release
 """
-import logging
-logger = logging.getLogger(__name__)
-
 from pyfda.libs.compat import QWidget, QLabel, QLineEdit, pyqtSignal, QVBoxLayout, QHBoxLayout
 
 import scipy.signal as sig
 import numpy as np
 
 import pyfda.filterbroker as fb
-from pyfda.libs.pyfda_qt_lib import qfilter_warning
+from pyfda.libs.pyfda_qt_lib import popup_warning
 from pyfda.libs.pyfda_lib import fil_save, safe_eval
 
 __version__ = "1.0"
@@ -157,7 +154,7 @@ Obviously, there is no minimum design algorithm or no design algorithm at all :-
         design.
         """
         if self.N > 2000:
-            return qfilter_warning(self, self.N, "Delay")
+            return popup_warning(self, self.N, "Delay")
         else:
             return True
 

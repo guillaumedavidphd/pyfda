@@ -42,26 +42,31 @@ THEME = 'light'     # select 'dark' or 'light' theme or 'none' or use one of the
 
 mpl_ms = 8  # base size for matplotlib markers
 # Various parameters for calculation and plotting
-params = {'N_FFT':  2048,   # number of FFT points for plot commands (freqz etc.)
-          'FMT': '{:.3g}',  # format string for QLineEdit fields
-          'CSV':  {  # format options and parameters for CSV-files and clipboard
-                  'delimiter': 'auto',  # default delimiter
-                  'lineterminator': CRLF,  # OS-dependent line break from pyfda_lib
-                  'orientation': 'auto',  # 'auto', 'vert', 'horiz'# table orientation
-                  'header': 'auto',  # 'auto', 'on', 'off'
-                  'cmsis' : False,  # True, False
-                  'clipboard': False  # source/target is QClipboard or file
-                  },
-          'FMT_ba': 4,      # number of digits for coefficient table
-          'FMT_pz': 5,      # number of digits for Pole/Zero table
-          'P_Marker': [mpl_ms, 'r'],  # size and color for poles' marker
-          'Z_Marker': [mpl_ms, 'b'],  # size and color for zeros' marker
-          'wdg_margins': (2, 1, 2, 0),  # (R, T, L, B) widget margins
-          'wdg_margins_spc': (2, 2, 2, 2),  # widget margins with more vertical spacing
-          'wdg_margins_0': (0, 0, 0, 0),  # set margins to zero
-          'mpl_margins': (0, 0, 0, 0),  # margins around matplotlib widgets
-          'mpl_hatch_border': {'linewidth': 1.0, 'color': 'blue', 'linestyle': '--'}
+params = {
+    'N_FFT':  2048,   # number of FFT points for plot commands (freqz etc.)
+    'FMT': '{:.3g}',  # format string for QLineEdit fields
+    'CSV': {  # format options and parameters for CSV-files and clipboard
+            'delimiter': 'auto',  # default delimiter
+            'lineterminator': CRLF,  # OS-dependent line break from pyfda_lib
+            'orientation': 'auto',  # 'auto', 'vert', 'horiz'# table orientation
+            'header': 'auto',  # 'auto', 'on', 'off'
+            # 'cmsis' : False,  # True, False
+            'destination': False  # source/target is 'clipboard' or 'file'
+            },
+    'screen': { # screen properties, filled with values in pyfdax.py
+        'ref_dpi': None, 'scaling': None, # dpi for scaling = 1 and scaling factor
+        'height': None, 'width': None}, # height and width in pixels
+    'FMT_ba': 4,      # number of digits for coefficient table
+    'FMT_pz': 5,      # number of digits for Pole/Zero table
+    'P_Marker': [mpl_ms, 'r'],  # size and color for poles' marker
+    'Z_Marker': [mpl_ms, 'b'],  # size and color for zeros' marker
+    'wdg_margins': (2, 1, 2, 0),  # (R, T, L, B) widget margins
+    'wdg_margins_spc': (2, 2, 2, 2),  # widget margins with more vertical spacing
+    'wdg_margins_0': (0, 0, 0, 0),  # set margins to zero
+    'mpl_margins': (0, 0, 0, 0),  # margins around matplotlib widgets
+    'mpl_hatch_border': {'linewidth': 1.0, 'color': 'blue', 'linestyle': '--'}
           }
+
 mpl_params_dark = {
             'mpl_hatch': {                          # hatched area for specs
                          'facecolor': 'none',
@@ -119,10 +124,10 @@ mpl_rc = {'lines.linewidth'           : 1.5,
           'font.style'                : 'normal',
           'mathtext.fontset'          : 'stixsans',  # 'stix',
           'mathtext.default'          : 'it',
-          'font.size'                 : 12,
-          'legend.fontsize'           : 12,
-          'axes.labelsize'            : 12,
-          'axes.titlesize'            : 14,
+          'font.size'                 : 10, # TODO: set this depending on resolution
+          'legend.fontsize'           : 'medium',
+          'axes.labelsize'            : 'medium',
+          'axes.titlesize'            : 'large',
           'axes.linewidth'            : 1,  # linewidth for coordinate system
           # grid settings are partially overwritten in mpl_widget.py
           'axes.formatter.use_mathtext': True,  # use mathtext for scientific notation.
@@ -283,9 +288,8 @@ qss_light = """
 
     .QTabWidget::pane{background-color: #F0F0F0;} /* background of tab content */
 
-    QLineEdit{background: white;
-                border-color: darkgrey;}
-    QLineEdit:disabled{background-color:lightgrey; color:blue}
+    QLineEdit{background: white; border-color: darkgrey;}
+    QLineEdit:disabled{background-color:lightgrey; color:blue;}
 
     QPushButton{
          background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
@@ -326,7 +330,7 @@ QTabWidget {
     background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
                         stop: 0 white, stop: 0.5 lightgray, stop: 1.0 #C2C7CB);
     border: 1px solid #C4C4C3;
-    border-top-left-radius: 4px;
+    border-top-left-radius: 0.2em;
  }
 
 QTabBar::tab:selected, QTabBar::tab:hover {background:lightblue;}
@@ -340,30 +344,34 @@ QTabBar::tab:only-one {
  }
 
 QTabBar::tab::top{
-    border-top-right-radius: 4px;
+    border-top-right-radius: 0.2em;
     min-width: 2em;
     margin-bottom: -0.2em;
     padding: 0.2em;
     padding-bottom: 0.4em;
     }
-QTabBar::tab::left{
-    border-bottom-left-radius: 4px;
-    width: 26px;
-    margin-right: -4px;
-    padding: 2px;
-    padding-right: 2px;
+
+ QTabBar::tab::left{
+    border-bottom-left-radius: 0.1em;
+    /* width: 26px; */
+    width: 1.5em;
+    margin-right: -0.2em;
+    padding: 0.1em;
+    padding-right: 0.1em;
  }
 
-/* separate styling for stimuli / audio widget with icons @ tabs */
+/* separate styling for stimuli / audio widget with icons @ tabs  */
  QTabWidget#tab_stim_w QTabBar::tab{
-     width: 30 px;
-     height: 30 px;
-     padding: 0;
+     width: 1.5em;
+     height: 1.5em;
+     margin-right: -0.2em;
+     /*padding: 0;
+     margin: 0;*/
  }
 
  /* small gap above vertical mplwidget tabs */
  QTabWidget#tab_mpl_w QTabBar::tab::left:first{
-    margin-top: 2px;
+    margin-top: 0.1em;
  }
 
 QTabBar::tab::top:selected {
@@ -410,7 +418,8 @@ qss_common = """
                 * [state="highlight"]{background-color: rgba(173, 216, 230, 25%)}
                 * [state="unused"], *[state="u"]{background-color: white; color:darkgrey}
                 /* semi-transparent red */
-                * [state="failed"]{background-color: rgba(255, 0, 0, 50%); color:black}
+                * [state="failed"]{background-color: rgba(255, 0, 0, 50%); color:black;
+                    font-weight:800;}
 
                 QWidget{font-size:10pt; font-family: Tahoma;}
 
@@ -420,7 +429,7 @@ qss_common = """
                 /* Frame with control elements of all plot widgets */
                 #frmControls{
                     border-top: solid darkgrey;
-                    border-width: 2px;
+                    border-width: 0.1em;
                     margin: 0;
                     padding: 0;
                     }
@@ -431,7 +440,7 @@ qss_common = """
                 {
                     /* background-color: pink; */
                     border: solid darkgrey;
-                    border-width: 1px 0 1px 0;
+                    border-width: 0.05em 0 0.05em 0;
                     padding: 0;
                     margin: 0 0 0 0; /* was: 1px 0 0 0 */
                     }
@@ -441,7 +450,7 @@ qss_common = """
                 {
                     /* background-color:lime; */
                     border: solid darkgrey;
-                    border-width: 1px 0 0 0;
+                    border-width: 0.05em 0 0 0;
                     padding: 0;
                     margin: 0;
                     }
@@ -452,7 +461,7 @@ qss_common = """
                 #wdg_fil{
                     /*background-color:lightblue;*/
                     border: none;
-                    padding: 5px 0 0 0;
+                    padding: 0.2em 0 0 0;
                     }
 
                 /* setFrameStyle(QFrame.StyledPanel|QFrame.Sunken) */
@@ -491,13 +500,13 @@ qss_common = """
                 QPushButton:pressed {background-color:black; color:white}
 
                 QPushButton:checked{
-                    background-color:lightblue; color:black;font-weight:800;}
+                    background-color:lightblue; color:black;font-weight: bold;}
                 QPushButtonRT:checked{
-                    background-color:lightblue; color:black;font-weight:800;}
+                    background-color:lightblue; color:black;font-weight: bold;}
 
                 QLineEdit{background-color:lightblue;
                                 /* border-style: outset; */
-                                border-width: 2px;}
+                                border-width: 0.1em;}
 
                 /* QSplitter styling adopted from
                 http://stackoverflow.com/questions/6832499/qsplitter-show-a-divider-or-a-margin-between-the-two-widgets
@@ -519,7 +528,7 @@ qss_common = """
                                         stop:0.407273 rgba(200, 200, 200, 255),
                                         stop:0.4825 rgba(101, 104, 113, 235),
                                         stop:0.6 rgba(255, 255, 255, 0));
-                    width: 8px;
+                    width: 0.2em;
                     image: url(':/ellipses_h.svg');
                     }
 

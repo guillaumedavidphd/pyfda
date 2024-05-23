@@ -77,6 +77,10 @@ class FIR_DF_pyfixp(object):
         -------
         None.
         """
+        # Do not initialize filter unless fixpoint mode is active
+        if not fb.fil[0]['fx_sim']:
+            return
+
         self.p = p  # parameter dictionary with coefficients etc.
 
         q_mul = p['QACC'].copy()
@@ -127,6 +131,7 @@ class FIR_DF_pyfixp(object):
         ----------
         x : array of float or float or None
             input value(s) scaled and quantized according to the setting of `p['QI']`
+            and fb.fil[0]['qfrmt']
             - When x is a scalar, calculate impulse response with the
                 amplitude defined by the scalar.
             - When `x == None`, calculate impulse response with amplitude = 1.
@@ -165,9 +170,12 @@ class FIR_DF_pyfixp(object):
 
         for k in range(len(x)):
             # partial products xb_q at time k, quantized with Q_mul:
-            xb_q = self.Q_mul.fixp(self.zi[k:k + self.L] * self.b_q)
+            xb_q = self.Q_mul.fixp(self.zi[k:k + self.L] * self.b_q,
+                                   in_frmt=fb.fil[0]['qfrmt'],
+                                   out_frmt=fb.fil[0]['qfrmt'])
             # accumulate x_bq to get accu[k]
-            y_q[k] = self.Q_acc.fixp(np.sum(xb_q))
+            y_q[k] = self.Q_acc.fixp(np.sum(xb_q), in_frmt=fb.fil[0]['qfrmt'],
+                                     out_frmt=fb.fil[0]['qfrmt'])
 
         self.zi = self.zi[-(self.L-1):]  # store last L-1 inputs (i.e. the L-1 registers)
 
@@ -179,7 +187,7 @@ class FIR_DF_pyfixp(object):
         self.Q_acc.q_dict['N_over'] = self.Q_acc.q_dict['N_over'] + self.Q_mul.q_dict['N_over']
         self.Q_mul.resetN()
 
-        return self.Q_O.fixp(y_q[:len(x)]), self.zi
+        return self.Q_O.requant(y_q[:len(x)], self.Q_acc), self.zi
 
 
 # ------------------------------------------------------------------------------
@@ -188,14 +196,29 @@ if __name__ == '__main__':
     Run widget standalone with
     `python -m pyfda.fixpoint_widgets.fir_df.fir_df_pyfixp`
     """
+    fb.fil[0]['fx_sim'] = True  # enable fixpoint mode
 
-    p = {'b': [1, 2, 3, 2, 1], 'QACC': {'Q': '4.3', 'ovfl': 'wrap', 'quant': 'round'},
-         'QI': {'Q': '2.3', 'ovfl': 'sat', 'quant': 'round'},
-         'QO': {'Q': '5.3', 'ovfl': 'wrap', 'quant': 'round'}
+    fb.fil[0]['ba'] = [[1.1, 2.2, 3.3, 2, 1], []]
+    p = {'QCB': {'WI': 2, 'WF': 5, 'w_a_m': 'a',
+                'ovfl': 'wrap', 'quant': 'floor', 'N_over': 0},
+         'QACC': {'WI': 6, 'WF': 3, 'ovfl': 'wrap', 'quant': 'round'},
+         'QI': {'WI': 2, 'WF': 3, 'ovfl': 'sat', 'quant': 'round'},
+         'QO': {'WI': 6, 'WF': 3, 'ovfl': 'wrap', 'quant': 'round'}
          }
-    dut = FIR_DF_pyfixp(p)
-    x = np.ones(4)
-    y = dut.fxfilter(x=x)
-    print(y)
-    y = dut.fxfilter(x=np.zeros(5))
-    print(y)
+    for frmt in ['qint', 'qfrac']:
+        print(f"\nFormat = '{frmt}'")
+        fb.fil[0]['qfrmt'] = frmt  # enable fixpoint mode
+        dut = FIR_DF_pyfixp(p)
+        print("Filter fixpoint response / state variables for input = np.ones(7):")
+        x = np.ones(7)
+        y = dut.fxfilter(x=x)
+        # if dut.Q_I.N_over != 0:
+        #    print(f"N_over(Q_I) = {dut.Q_I.N_over}")
+        if dut.Q_O.N_over != 0:
+            print(f"N_over(Q_O) = {dut.Q_O.N_over}")
+        if dut.Q_mul.N_over != 0:
+            print(f"N_over(Q_mul) = {dut.Q_mul.N_over}")
+        print(y)
+        print("... followed by x = np.zeros(5):")
+        y = dut.fxfilter(x=np.zeros(5))
+        print(y)

@@ -1,29 +1,77 @@
 # Build a distribution package and upload it to PyPI
 # https://www.seanh.cc/2022/05/21/publishing-python-packages-from-github-actions/
 # https://packaging.python.org/en/latest/tutorials/packaging-projects/#generating-distribution-archives
+# https://github.com/marketplace/actions/pypi-publish
+
+# Workflow for building a pip package and uploading it to PyPI
+# see https://data-dive.com/multi-os-deployment-in-cloud-using-pyinstaller-and-github-actions
+#
+# OpenID connect (OIDC) provides short-lived credentials ("OIDC tokens")
+# for upload to PyPI, see https://docs.pypi.org/trusted-publishers/
+#
+# The workflow runs:
+#  - when manually triggered
+#  - for tagged release events, creating a versioned release
+#
+#    The latter requires a workflow like
+#
+#    * <update version.py>      # PyPI version number is created from this
+#    * <merge develop and main, push develop (default branch)
+#    * git tag v0.4.5           # create new local tag
+#    * git push origin --tags   # push only tag to origin
+#    * git push                 # push changes to origin, sending a 'push' event
+#    * <draft a (pre)release on Github from tag,
+#       sending a 'release' event>
+#
+#   Tags can be deleted with:
+#
+#     git tag -d <tag_name>
+#     git push --delete origin <tag_name>
 
 name: Publish to PyPI.org
 on:
   release:
     types: [published]
-  # Run upon push to master branch
-  push:
-   branches: [ master ]
-  # Run manually from the Actions tab
+  # Run upon push to main branch (disabled, only for tagged releases):
+  # push:
+  #  branches: [ main ]
+  # Run manually from the Actions tab:
   workflow_dispatch:
 
 jobs:
   pypi:
     runs-on: ubuntu-latest
+    # ---- only needed for 'trusted publishing' from Github -> PyPI ---- #
+    # ---- via OIDC, no username / password or API token is needed  ---- #
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pyfda
+    # IMPORTANT: this permission is mandatory for trusted publishing
+    permissions:
+      id-token: write
+    # ------------------------------------------------------------------ #
     steps:
+      - name: Infos about github event and ref
+        run: |
+          echo github.event_name:  ${{ github.event_name }}
+          echo github.ref: ${{ github.ref }}
+          echo github.ref_type:  ${{ github.ref_type }}
+          echo github.ref_name:  ${{ github.ref_name }}
+
+      # Example result for tagged release:
+      #    github.event_name: release
+      #    github.ref: refs/tags/v0.8.0a3
+      #    github.ref_type: tag
+      #    github.ref_name: v0.8.0a3
+
       # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - name: Checkout
         uses: actions/checkout@v3
-        # fetch complete history for all branches
         with:
-          fetch-depth: 0
+          # fetch-depth: 0         # fetch complete history for all branches
+          ref: main
 
-      # Sets up python3, installing a version of Python or PyPy and (by default) 
+      # Sets up python3, installing a version of Python or PyPy and (by default)
       # adds it to the PATH
       # Optionally: caches dependencies for pip, pipenv and poetry
       # Registers problem matchers for error output (?)
@@ -35,8 +83,11 @@ jobs:
       - run: |
           python3 -m pip install --upgrade build
           python3 -m build
-      # Upload the package to PyPI
+          echo Build successful!
+      # Upload the package to PyPI for tagged releases only
       - name: Publish package
+        if: github.event_name == 'release' && startsWith(github.ref, 'refs/tags')
         uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          password: ${{ secrets.PYPI_API_TOKEN }}
+        # not needed for trusted publishing:
+        # with:
+        #   password: ${{ secrets.PYPI_API_TOKEN }}

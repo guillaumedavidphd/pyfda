@@ -40,7 +40,7 @@ from scipy.special import sinc
 
 import pyfda.filterbroker as fb  # importing filterbroker initializes all its globals
 from pyfda.libs.pyfda_lib import fil_save, round_odd, pprint_log
-from pyfda.libs.pyfda_qt_lib import qfilter_warning
+from pyfda.libs.pyfda_qt_lib import popup_warning
 from pyfda.libs.pyfda_fft_windows_lib import QFFTWinSelector, get_windows_dict
 from pyfda.plot_widgets.plot_fft_win import Plot_FFT_win
 from .common import Common, remezord
@@ -68,15 +68,16 @@ class Firwin(QWidget):
     sig_tx_local = pyqtSignal(object)
     from pyfda.libs.pyfda_qt_lib import emit
 
-    def __init__(self):
+    def __init__(self, objectName='firwin_inst'):
         QWidget.__init__(self)
 
+        self.setObjectName(objectName)
         self.ft = 'FIR'
 
         win_names_list = ["Boxcar", "Rectangular", "Barthann", "Bartlett", "Blackman",
-                          "Blackmanharris", "Bohman", "Cosine", "Dolph-Chebyshev",
+                          "Blackmanharris", "Bohman", "Cosine", "Dolph-Chebyshev", "DPSS",
                           "Flattop", "General Gaussian", "Gauss", "Hamming", "Hann",
-                          "Kaiser", "Nuttall", "Parzen", "Slepian", "Triangular", "Tukey"]
+                          "Kaiser", "Nuttall", "Parzen", "Triangular", "Tukey"]
         self.cur_win_name = "Kaiser"  # set initial window type
         self.alg = "ichige"
 
@@ -90,7 +91,7 @@ class Firwin(QWidget):
 
         # instantiate FFT window with windows dict
         self.fft_widget = Plot_FFT_win(
-            self, win_dict=self.win_dict, sym=True, title="pyFDA FIR Window Viewer")
+            win_dict=self.win_dict, sym=True, title="pyFDA FIR Window Viewer")
         # hide window initially, this is modeless i.e. a non-blocking popup window
         self.fft_widget.hide()
 
@@ -148,7 +149,7 @@ class Firwin(QWidget):
 
         # --- signals coming from the FFT window widget or the qfft_win_select
         if dict_sig['class'] in {'Plot_FFT_win', 'QFFTWinSelector'}:
-            if 'closeEvent' in dict_sig:  # hide FFT window windget and return
+            if 'close_event' in dict_sig:  # hide FFT window windget and return
                 self.hide_fft_wdg()
                 return
             else:
@@ -156,7 +157,7 @@ class Firwin(QWidget):
                     # self._update_fft_window()  # TODO: needed?
                     # local connection to FFT window widget and qfft_win_select
                     self.emit(dict_sig, sig_name='sig_tx_local')
-                    # global connection to upper hierachies
+                    # global connection to upper hierarchies
                     # send notification that filter design has changed
                     self.emit({'filt_changed': 'firwin'})
 
@@ -175,7 +176,7 @@ class Firwin(QWidget):
         self.cmb_firwin_alg.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.cmb_firwin_alg.hide()
 
-        self.qfft_win_select = QFFTWinSelector(self, self.win_dict)
+        self.qfft_win_select = QFFTWinSelector(self.win_dict, objectName='fir_win_qfft')
         # Minimum size, can be changed in the upper hierarchy levels using layouts:
         # self.qfft_win_select.setSizeAdjustPolicy(QComboBox.AdjustToContents)
 
@@ -284,7 +285,7 @@ class Firwin(QWidget):
         design.
         """
         if self.N > 1000:
-            return qfilter_warning(self, self.N, "FirWin")
+            return popup_warning(self, self.N, "FirWin")
         else:
             return True
 
@@ -465,7 +466,6 @@ class Firwin(QWidget):
         self._get_params(fil_dict)
         if not self._test_N():
             return -1
-        logger.warning(self.win_dict["cur_win_name"])
         self._save(fil_dict,
                    self.firwin(self.N, fil_dict['F_C'], nyq=0.5,
                                window=self.qfft_win_select.get_window(self.N, sym=True)))

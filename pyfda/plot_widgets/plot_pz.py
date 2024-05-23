@@ -6,6 +6,9 @@
 # Licensed under the terms of the MIT License
 # (see file LICENSE in root directory for details)
 
+# TODO: Make P/Z draggable -> Bercher, Journey in Signal Processing with Jupyter, 2018.
+# TODO: Highlight P/Z selected in P/Z editor
+
 """
 Widget for plotting poles and zeros
 """
@@ -81,7 +84,7 @@ class Plot_PZ(QWidget):
                     and dict_sig['ui_global_changed'] == 'resized':
                 self.draw()
             elif 'mpl_toolbar' in dict_sig and dict_sig['mpl_toolbar'] == 'ui_level':
-                self.frmControls.setVisible(dict_sig['value'] == 0)
+                self.frmControls.setVisible(self.mplwidget.mplToolbar.a_ui_level == 0)
 
         else:
             if 'data_changed' in dict_sig:
@@ -104,8 +107,7 @@ class Plot_PZ(QWidget):
         qcmb_box_populate(
             self.cmb_overlay, self.cmb_overlay_items, self.cmb_overlay_default)
 
-        self.but_log = PushButton(" Log.", checked=True)
-        self.but_log.setObjectName("but_log")
+        self.but_log = PushButton(" Log.", checked=True, objectName="but_log")
         self.but_log.setToolTip("<span>Log. scale for overlays.</span>")
 
         self.diaRad_Hf = QDial(self)
@@ -120,8 +122,7 @@ class Plot_PZ(QWidget):
         self.lblRad_Hf = QLabel("Radius", self)
 
         self.lblBottom = QLabel(to_html("Bottom =", frmt='bi'), self)
-        self.ledBottom = QLineEdit(self)
-        self.ledBottom.setObjectName("ledBottom")
+        self.ledBottom = QLineEdit(self, objectName="ledBottom")
         self.ledBottom.setText(str(self.zmin))
         self.ledBottom.setMaximumWidth(qtext_width(N_x=8))
         self.ledBottom.setToolTip("Minimum display value.")
@@ -129,8 +130,7 @@ class Plot_PZ(QWidget):
         self.lblBottomdB.setVisible(self.but_log.isChecked())
 
         self.lblTop = QLabel(to_html("Top =", frmt='bi'), self)
-        self.ledTop = QLineEdit(self)
-        self.ledTop.setObjectName("ledTop")
+        self.ledTop = QLineEdit(self, objectName="ledTop")
         self.ledTop.setText(str(self.zmax))
         self.ledTop.setToolTip("Maximum display value.")
         self.ledTop.setMaximumWidth(qtext_width(N_x=8))
@@ -160,8 +160,7 @@ class Plot_PZ(QWidget):
         #
         # This widget encompasses all control subwidgets
         # ----------------------------------------------------------------------
-        self.frmControls = QFrame(self)
-        self.frmControls.setObjectName("frmControls")
+        self.frmControls = QFrame(self, objectName="frmControls")
         self.frmControls.setLayout(layHControls)
 
         # ----------------------------------------------------------------------
@@ -273,17 +272,6 @@ class Plot_PZ(QWidget):
         z_marker = params['Z_Marker']
 
         zpk = fb.fil[0]['zpk']
-
-        # add antiCausals if they exist (must take reciprocal to plot)
-        if 'rpk' in fb.fil[0]:
-            zA = fb.fil[0]['zpk'][0]
-            zA = np.conj(1./zA)
-            pA = fb.fil[0]['zpk'][1]
-            pA = np.conj(1./pA)
-            zC = np.append(zpk[0], zA)
-            pC = np.append(zpk[1], pA)
-            zpk[0] = zC
-            zpk[1] = pC
 
         self.ax.clear()
 

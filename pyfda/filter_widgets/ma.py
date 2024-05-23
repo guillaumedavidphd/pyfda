@@ -32,10 +32,6 @@ API version info:
 
    :2.2: Rename `filter_classes` -> `classes`, remove Py2 compatibility
 """
-
-import logging
-logger = logging.getLogger(__name__)
-
 from pyfda.libs.compat import (QWidget, QLabel, QLineEdit, pyqtSignal, QCheckBox,
                       QVBoxLayout, QHBoxLayout)
 
@@ -43,7 +39,8 @@ import numpy as np
 
 import pyfda.filterbroker as fb
 from pyfda.libs.pyfda_lib import fil_save, fil_convert, ceil_odd, safe_eval
-from pyfda.libs.pyfda_qt_lib import qfilter_warning
+from pyfda.libs.pyfda_qt_lib import popup_warning
+from pyfda.libs.pyfda_sig_lib import zeros_with_val
 
 __version__ = "2.2"
 
@@ -75,9 +72,10 @@ near ``f_S/2`` (highpass).
     sig_tx = pyqtSignal(object)
     from pyfda.libs.pyfda_qt_lib import emit
 
-    def __init__(self):
+    def __init__(self, objectName='ma_inst'):
         QWidget.__init__(self)
 
+        self.setObjectName(objectName)
         self.delays = 12 # number of delays per stage
         self.stages = 1 # number of stages
 
@@ -330,7 +328,7 @@ near ``f_S/2`` (highpass).
             norm = np.sum(b0)
 
         if self.delays > 1000:
-            if not qfilter_warning(None, self.delays*self.stages, "Moving Average"):
+            if not popup_warning(None, self.delays*self.stages, "Moving Average"):
                 return -1
 
 
@@ -346,8 +344,10 @@ near ``f_S/2`` (highpass).
             k = 1./norm ** self.stages
         p = np.zeros(len(z))
 
+        gain = zeros_with_val(len(z), k)
+
         # store in class attributes for the _save method
-        self.zpk = [z,p,k]
+        self.zpk = [z,p,gain]
         self.b = b
         self._save(fil_dict)
 

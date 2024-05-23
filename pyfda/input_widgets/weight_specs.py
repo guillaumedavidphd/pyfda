@@ -16,25 +16,26 @@ from pyfda.libs.compat import (
     QVBoxLayout, QHBoxLayout, QGridLayout, pyqtSignal, QEvent)
 
 import pyfda.filterbroker as fb
-from pyfda.libs.pyfda_lib import to_html, safe_eval
+from pyfda.libs.pyfda_lib import to_html, safe_eval, pprint_log, first_item
 from pyfda.libs.pyfda_qt_lib import qstyle_widget
 from pyfda.pyfda_rc import params  # FMT string for QLineEdit fields, e.g. '{:.3g}'
 
 import logging
 logger = logging.getLogger(__name__)
 
-
 class WeightSpecs(QWidget):
     """
     Build and update widget for entering the weight
     specifications like W_SB, W_PB etc.
     """
-    sig_tx = pyqtSignal(object)  # outgoing
+    sig_rx = pyqtSignal(object)  # receive signals from higher hierarchies
+    sig_tx = pyqtSignal(object)  # outgoing signals
     from pyfda.libs.pyfda_qt_lib import emit
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, objectName=""):
         super(WeightSpecs, self).__init__(parent)
 
+        self.setObjectName(objectName)
         self.qlabels = []  # list with references to QLabel widgets
         self.qlineedit = []  # list with references to QLineEdit widgets
 
@@ -42,6 +43,22 @@ class WeightSpecs(QWidget):
 
         self._construct_UI()
 
+# -------------------------------------------------------------
+    def process_sig_rx(self, dict_sig=None):
+        """
+        Process signals coming in via subwidgets and sig_rx
+        """
+        # logger.warning(
+        #     f"SIG RX: {first_item(dict_sig)}")
+        if dict_sig['id'] == id(self):
+            # logger.warning("Stopped infinite loop:\n{0}".format(pprint_log(dict_sig)))
+            return
+        elif 'data_changed' in dict_sig:
+            if dict_sig['data_changed'] in {'filter_loaded', 'filter_designed'}:
+                self.load_dict()
+            # elif 'filt_changed' in dict_sig['data_changed'] == 'filter_designed':
+            #    self.update_UI()
+            # This needs to be called directly, passing labels etc.
 # ------------------------------------------------------------------------------
     def _construct_UI(self):
         """
@@ -89,6 +106,11 @@ class WeightSpecs(QWidget):
         self.update_UI(new_labels=new_labels)
 
         # ----------------------------------------------------------------------
+        # GLOBAL SIGNALS & SLOTs
+        # ----------------------------------------------------------------------
+        self.sig_rx.connect(self.process_sig_rx)
+
+        # ----------------------------------------------------------------------
         # LOCAL SIGNALS & SLOTs / EVENT FILTER
         # ----------------------------------------------------------------------
         self.butReset.clicked.connect(self._reset_weights)
@@ -119,7 +141,7 @@ class WeightSpecs(QWidget):
                 self.spec_edited = False
                 self.load_dict()
                 # store current entry in case new value can't be evaluated:
-                fb.data_old = source.text()
+                self.data_prev = source.text()
             elif event.type() == QEvent.KeyPress:
                 self.spec_edited = True  # entry has been changed
                 key = event.key()
@@ -198,7 +220,7 @@ class WeightSpecs(QWidget):
         """
         if self.spec_edited:
             w_label = str(widget.objectName())
-            w_value = safe_eval(widget.text(), fb.data_old, sign='pos')
+            w_value = safe_eval(widget.text(), self.data_prev, sign='pos')
             if w_value < 1:
                 w_value = 1
             if w_value > 1.e6:

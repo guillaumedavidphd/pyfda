@@ -12,7 +12,8 @@ from pyfda.libs.compat import (
     QFont, QVBoxLayout, QHBoxLayout, QGridLayout)
 
 import pyfda.filterbroker as fb
-from pyfda.libs.pyfda_lib import to_html, lin2unit, unit2lin, safe_eval
+from pyfda.libs.pyfda_lib import(
+    to_html, lin2unit, unit2lin, safe_eval, pprint_log, first_item)
 from pyfda.libs.pyfda_qt_lib import qstyle_widget, qget_cmb_box
 from pyfda.pyfda_rc import params  # FMT string for QLineEdit fields, e.g. '{:.3g}'
 
@@ -25,21 +26,38 @@ class AmplitudeSpecs(QWidget):
     Build and update widget for entering the amplitude
     specifications like A_SB, A_PB etc.
     """
+    sig_rx = pyqtSignal(object)  # receive signals from higher hierarchies
     sig_tx = pyqtSignal(object)  # emitted when amplitude unit or spec has been changed
+
     from pyfda.libs.pyfda_qt_lib import emit
 
-    def __init__(self, parent=None, title="Amplitude Specs"):
+    def __init__(self, parent=None, title="Amplitude Specs", objectName=""):
         """
         Initialize
         """
         super(AmplitudeSpecs, self).__init__(parent)
         self.title = title
+        self.setObjectName(objectName)
 
         self.qlabels = []    # list with references to QLabel widgets
         self.qlineedit = []  # list with references to QLineEdit widgets
 
         self.spec_edited = False  # flag whether QLineEdit field has been edited
         self._construct_UI()
+
+# -------------------------------------------------------------
+    def process_sig_rx(self, dict_sig=None):
+        """
+        Process signals coming in via subwidgets and sig_rx
+        """
+        # logger.warning(
+        #    f"SIG_RX: {first_item(dict_sig)}")
+        if dict_sig['id'] == id(self):
+            # this should never happen
+            logger.warning("Stopped infinite loop:\n{0}".format(pprint_log(dict_sig)))
+            return
+        elif 'data_changed' in dict_sig and dict_sig['data_changed'] == 'filter_loaded':
+            self.load_dict()
 
 # ------------------------------------------------------------------------------
     def _construct_UI(self):
@@ -56,9 +74,8 @@ class AmplitudeSpecs(QWidget):
 
         lblUnits = QLabel("in", self)
 
-        self.cmbUnitsA = QComboBox(self)
+        self.cmbUnitsA = QComboBox(self, objectName="cmbUnitsA")
         self.cmbUnitsA.addItems(amp_units)
-        self.cmbUnitsA.setObjectName("cmbUnitsA")
         self.cmbUnitsA.setToolTip(
             "<span>Unit for amplitude specifications:"
             " dB is attenuation (&gt; 0); levels in V and W have to be &lt; 1.</span>")
@@ -104,6 +121,11 @@ class AmplitudeSpecs(QWidget):
         self.update_UI(new_labels=new_labels)
 
         # ----------------------------------------------------------------------
+        # GLOBAL SIGNALS & SLOTs
+        # ----------------------------------------------------------------------
+        self.sig_rx.connect(self.process_sig_rx)
+
+        # ----------------------------------------------------------------------
         # LOCAL SIGNALS & SLOTs / EVENT MONITORING
         # ----------------------------------------------------------------------
         self.cmbUnitsA.currentIndexChanged.connect(self._set_amp_unit)
@@ -134,7 +156,7 @@ class AmplitudeSpecs(QWidget):
                 self.spec_edited = False
                 self.load_dict()
                 # store current entry in case new value can't be evaluated:
-                fb.data_old = source.text()
+                self.data_prev = source.text()
             elif event.type() == QEvent.KeyPress:
                 self.spec_edited = True  # entry has been changed
                 key = event.key()
@@ -248,7 +270,7 @@ class AmplitudeSpecs(QWidget):
             unit = str(self.cmbUnitsA.currentText())
             filt_type = fb.fil[0]['ft']
             amp_label = str(source.objectName())
-            amp_value = safe_eval(source.text(), fb.data_old, sign='pos')
+            amp_value = safe_eval(source.text(), self.data_prev, sign='pos')
             fb.fil[0].update({amp_label: unit2lin(amp_value, filt_type, amp_label, unit)})
             self.emit({'specs_changed': 'a_specs'})
             self.spec_edited = False  # reset flag

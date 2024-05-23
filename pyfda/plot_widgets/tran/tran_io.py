@@ -45,10 +45,12 @@ class Tran_IO(QWidget):
 
         self.ui = Tran_IO_UI()  # create the UI part with buttons etc.
         self.parent = parent    # handle to instantiating object
-        self._construct_UI()
 
         self.norm = self.ui.led_normalize_default
         self.nr_loops = self.ui.led_nr_loops_default
+        self.f_s_wav = self.f_s_file = fb.fil[0]['f_S']
+
+        self._construct_UI()
 
 # ------------------------------------------------------------------------------
     def process_sig_rx(self, dict_sig=None) -> None:
@@ -58,17 +60,19 @@ class Tran_IO(QWidget):
         - local widgets (impz_ui) and
         - plot_tab_widgets() (global signals)
         """
-        logger.warning("SIG_RX - vis: {0}\n{1}"
-                       .format(self.isVisible(), pprint_log(dict_sig)))
+        # logger.warning("SIG_RX - vis: {0}\n{1}"
+        #                .format(self.isVisible(), pprint_log(dict_sig)))
 
         if 'id' in dict_sig and dict_sig['id'] == id(self):
             logger.warning("Stopped infinite loop:\n{0}".format(pprint_log(dict_sig)))
-        elif 'closeEvent' in dict_sig:
+        elif 'close_event' in dict_sig:
             self.close_csv_win()
             self.emit({'ui_local_changed': 'csv'})  # propagate one level up
         elif 'ui_global_changed' in dict_sig and dict_sig['ui_global_changed'] == 'csv':
             # Set CSV options button according to state of CSV popup handle
             self.ui.but_csv_options.setChecked(not dirs.csv_options_handle is None)
+        elif 'view_changed' in dict_sig and dict_sig['view_changed'] == 'f_S':
+            self.set_f_s_wav(fb.fil[0]['f_S'] * fb.fil[0]['f_s_scale'])
 
     # ------------------------------------------------------------------------------
     def _construct_UI(self) -> None:
@@ -83,18 +87,43 @@ class Tran_IO(QWidget):
         # ---------------------------------------------------------------------
         # UI SIGNALS & SLOTs
         # ---------------------------------------------------------------------
+        self.ui.but_csv_options.clicked.connect(self.open_csv_win)
+        self.ui.led_f_s_wav.editingFinished.connect(self.set_f_s_wav)
+
         self.ui.but_select.clicked.connect(self.load_data_raw)
         self.ui.cmb_chan_import.currentIndexChanged.connect(self.select_chan_normalize)
         self.ui.but_load.clicked.connect(self.load_button_clicked)
         self.ui.but_normalize.clicked.connect(self.select_chan_normalize)
         self.ui.led_normalize.editingFinished.connect(self.select_chan_normalize)
 
-        self.ui.but_csv_options.clicked.connect(self.open_csv_win)
-
         self.ui.led_nr_loops.editingFinished.connect(self.save_nr_loops)
         self.ui.but_save.clicked.connect(self.save_data)
 
+        # ----------------------------------------------------------------------
+        # GLOBAL SIGNALS & SLOTs
+        # ----------------------------------------------------------------------
+        # connect rx global events to process_sig_rx() and to listening subwidgets
+        self.sig_rx.connect(self.process_sig_rx)
+
         self.setLayout(layVMain)
+
+        self.set_f_s_wav(fb.fil[0]['f_S'] * fb.fil[0]['f_s_scale'])
+
+    # ------------------------------------------------------------------------------
+    def set_f_s_wav(self, f_s_wav=None):
+        """
+        Set sampling frequency for wav files, either from LineEdit (button `Auto f_s`
+        unchecked) or from argument `f_s_wav` (button `Auto f_s` checked), passed either
+        from loaded wav file or from updated f_S some other place in the app.
+
+        The sampling frequency needs to integer and at least 1.
+        """
+        if not self.ui.but_f_s_wav_auto.isChecked() or f_s_wav is None:
+            f_s_wav = self.ui.led_f_s_wav.text()
+
+        self.f_s_wav = max(safe_eval(f_s_wav, alt_expr=self.f_s_wav,
+                                 return_type='int', sign='pos'), 1)
+        self.ui.led_f_s_wav.setText(str(self.f_s_wav))
 
     # ------------------------------------------------------------------------------
     def unload_data(self):
@@ -102,13 +131,16 @@ class Tran_IO(QWidget):
         Enable load button and set to normal mode, replace label "Loaded" by "Load",
         clear loaded data, disable normalize button and emit 'data_changed' signal
         """
+        was_loaded = self.ui.but_load.property("state") == "ok"
         self.ui.but_load.setEnabled(True)
         qstyle_widget(self.ui.but_load, "normal")
         self.ui.but_load.setText("Load:")
         self.ui.but_normalize.setEnabled(False)
         self.ui.led_normalize.setEnabled(False)
         self.x_file = None
-        self.emit({'data_changed': 'file_io'})
+
+        if was_loaded:
+            self.emit({'data_changed': 'file_io'})
 
     # ------------------------------------------------------------------------------
     def load_data_raw(self):
@@ -142,7 +174,6 @@ class Tran_IO(QWidget):
 
         self.N = None
         self.nchans = None
-        self.f_S = None
         self.WL = None
 
         info_str = ""
@@ -152,26 +183,30 @@ class Tran_IO(QWidget):
             if ret < 0:
                 return -1
             self.data_raw = io.load_data_np(self.file_name, 'wav')
-            if np.isscalar(self.data_raw):  # None or -1
+            if self.data_raw is None:  # an error occurred
                 return -1
             self.N = io.read_wav_info.N
             self.nchans = io.read_wav_info.nchans
-            self.f_S = io.read_wav_info.f_S
+            self.f_s_file = io.read_wav_info.f_S
             self.WL = io.read_wav_info.WL
             # info_str = f" x {self.WL * 8} bits,"
             info_str = f" x {io.read_wav_info.sample_format},"
             self.ui.frm_f_s.setVisible(True)
-            self.ui.lbl_f_s_value.setText(str(self.f_S))
+            self.ui.lbl_f_s_value.setText(str(self.f_s_file))
 
         elif self.file_type == 'csv':
             self.ui.frm_f_s.setVisible(False)
             self.data_raw = io.load_data_np(self.file_name, 'csv')
-
-            self.N, self.nchans = np_shape(self.data_raw)
-            if self.N in {None, 0}:  # data is scalar, None or multidim
+            if self.data_raw is None:
+                logger.error(f"Could not load '{self.file_name}'.")
                 qstyle_widget(self.ui.but_load, "error")
-                logger.warning("Unsuitable data format")
                 return -1
+
+            # self.N, self.nchans = np_shape(self.data_raw)
+            # if self.N in {None, 0}:  # data is scalar, None or multidim
+            #     qstyle_widget(self.ui.but_load, "error")
+            #     logger.warning("Unsuitable data format")
+            #     return -1
             info_str = f" ({io.load_data_np.info_str})"
         else:
             logger.error(f"Unknown file format '{self.file_type}'")
@@ -239,7 +274,6 @@ class Tran_IO(QWidget):
             logger.warning("No data loaded yet.")
             return None
 
-        logger.info(type(self.data_raw))
         logger.info(pprint_log(self.data_raw))
 
         if self.data_raw.ndim == 1:
@@ -267,6 +301,24 @@ class Tran_IO(QWidget):
         self.ui.but_normalize.setEnabled(True)
         self.ui.led_normalize.setEnabled(True)
 
+        if self.file_type == 'wav':
+            self.set_f_s_wav(self.f_s_file)  # copy f_s read from wav file info to line edit
+            scale_int = 1
+            offset_int = 0
+
+            if self.ui.but_scale_int.isChecked() == True:
+                if io.read_wav_info.sample_format == "int16":
+                    scale_int = (1 << 15) - 1
+                elif io.read_wav_info.sample_format == "int24":
+                    scale_int = (1 << 23) - 1
+                elif io.read_wav_info.sample_format == "int32":
+                    scale_int = (1 << 31) - 1
+                elif io.read_wav_info.sample_format == "uint8":
+                    scale_int = (1 << 7) - 1
+                    offset_int = 128
+
+            data = (data - offset_int) / scale_int
+
         if self.ui.but_normalize.isChecked() == True:
             self.norm = safe_eval(self.ui.led_normalize.text(), self.norm, return_type="float")
             self.ui.led_normalize.setText(str(self.norm))
@@ -275,6 +327,10 @@ class Tran_IO(QWidget):
             self.x_file = data
 
         self.emit({'data_changed': 'file_io'})
+        if self.ui.but_f_s_wav_auto.isChecked():
+            fb.fil[0]['f_S'] = self.f_s_file
+            fb.fil[0]['freq_specs_unit'] = 'Hz'
+            self.emit({'view_changed': 'f_S'})
         return
 
     # ------------------------------------------------------------------------------
@@ -315,7 +371,10 @@ class Tran_IO(QWidget):
         Save a file with UI dialog (CSV or WAV), using the data for left and right
         channel, selected in the UI.
 
-        TODO: uint8 export doesn't work, real export produces incompatible format?
+        WAV files can be exported in various int formats, the sampling frequency is
+        read from the line edit field.
+
+        TODO: uint8 export doesn't work
         """
         file_type = (qget_cmb_box(self.ui.cmb_file_format),)  # str -> tuple
 
@@ -355,44 +414,41 @@ class Tran_IO(QWidget):
                 # create 2D-array from 1D arrays and transpose them to row based form
                 data = np.vstack((data, data_r))
 
-        # convert to selected data format
-        frmt = qget_cmb_box(self.ui.cmb_data_format)
-        scale_int = self.ui.but_scale_int.isChecked()
-
-        if frmt not in {'uint8', 'int16', 'int32', 'float32', 'float64'}:
-            logger.error(f"Unsupported format {frmt} for data export.")
-            return -1
-        elif data.dtype not in {np.dtype('float32'), np.dtype('float64')}:
-            logger.warning(f"Data has format '{data.dtype}', instead of 'float', "
-                           "scaling may yield incorrect results.")
-        if frmt == 'int16':
-            if scale_int:
-                data = (data * (1 << 15)).astype(np.int16)
+        if self.file_type == 'wav':
+            # convert to selected data format
+            frmt = qget_cmb_box(self.ui.cmb_data_format)
+            scale_int = self.ui.but_scale_int.isChecked()
+            if frmt not in {'uint8', 'int16', 'int32', 'float32', 'float64'}:
+                logger.error(f"Unsupported format {frmt} for data export.")
+                return -1
+            elif data.dtype not in {np.dtype('float32'), np.dtype('float64')}:
+                logger.warning(f"Data has format '{data.dtype}', instead of 'float', "
+                            "scaling may yield incorrect results.")
+            if frmt == 'int16':
+                if scale_int:
+                    data = (data * ((1 << 15) - 1)).astype(np.int16)
+                else:
+                    data = data.astype(np.int16)
+            elif frmt == 'int32':
+                if scale_int:
+                    data = (data * ((1 << 31) - 1)).astype(np.int32)
+                else:
+                    data = data.astype(np.int32)
+            elif frmt == 'uint8':
+                if scale_int:
+                    data = (data * 127 + 128).astype(np.uint8)
+                else:
+                    data = data.astype(np.uint8)
+            elif frmt == 'float32':
+                data = data.astype(np.float32)
             else:
-                data = data.astype(np.int16)
-        elif frmt == 'int32':
-            if scale_int:
-                data = (data * (1 << 31)).astype(np.int32)
-            else:
-                data = data.astype(np.int32)
-        elif frmt == 'uint8':
-            if scale_int:
-                data = (data * 128 + 128).astype(np.uint8)
-            else:
-                data = data.astype(np.uint8)
-        elif frmt == 'float32':
-            data = data.astype(np.float32)
-        else:
-            data = data.astype(np.float64)            
-
+                data = data.astype(np.float64)
 
         # repeat selected signal(s) for specified number of cycles
-        cycles = int(self.ui.led_nr_repetitions.text())
+        cycles = int(self.ui.led_nr_loops.text())
         data = np.tile(data, cycles).T
 
-        f_S = fb.fil[0]['f_S']
-
         try:
-            io.save_data_np(self.file_name, self.file_type, data, f_S)
+            io.save_data_np(self.file_name, self.file_type, data, self.f_s_wav)
         except IOError as e:
             logger.warning(f"File could not be saved:\n{e}")

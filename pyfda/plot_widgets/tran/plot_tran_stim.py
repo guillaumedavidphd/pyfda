@@ -12,7 +12,7 @@ Widget for plotting impulse and general transient responses
 from pyfda.libs.compat import QWidget, pyqtSignal, QVBoxLayout
 import numpy as np
 from numpy import ndarray, pi
-from pyfda.libs.pyfda_qt_lib import qget_cmb_box
+from pyfda.libs.pyfda_qt_lib import qget_cmb_box, qstyle_widget
 import scipy.signal as sig
 from scipy.special import sinc, diric
 
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 class Plot_Tran_Stim(QWidget):
     """
-    Construct a widget for plotting transient responses
+    Construct a widget for defining transient signals
     """
     sig_rx = pyqtSignal(object)  # incoming
     sig_tx = pyqtSignal(object)  # outgoing, e.g. when stimulus has been calculated
@@ -39,16 +39,14 @@ class Plot_Tran_Stim(QWidget):
 
     def __init__(self):
         super().__init__()
-        self.ui = Plot_Tran_Stim_UI()  # create the UI part with buttons etc.
+        # create the UI part with buttons etc.
+        self.ui = Plot_Tran_Stim_UI(objectName='plot_tran_stim_ui_inst')
 
         # initial settings
         self.needs_calc = True   # flag whether plots need to be recalculated
         self.needs_redraw = [True] * 2  # flag which plot needs to be redrawn
         self.error = False
         self.x_file = None  # data mapped from file io in Plot_Impz.file_io()
-
-        self.rad_phi1 = self.ui.phi1 / 180 * pi  # precalculate constants
-        self.rad_phi2 = self.ui.phi2 / 180 * pi
 
         self._construct_UI()
 
@@ -127,7 +125,7 @@ class Plot_Tran_Stim(QWidget):
                     self.title_str = r'Bandlim. Sawtooth Stimulus'
                 else:
                     self.title_str = r'Sawtooth Stimulus'
-            elif self.ui.stim == "square":
+            elif self.ui.stim == "rect_per":
                 if self.ui.but_stim_bl.isChecked():
                     self.title_str = r'Bandlimited Rect. Stimulus'
                 else:
@@ -166,10 +164,11 @@ class Plot_Tran_Stim(QWidget):
             if self.ui.ledDC.isVisible and self.ui.DC != 0:
                 self.title_str += r' + DC'
             # ==================================================================
-            if qget_cmb_box(self.ui.cmb_file_io) == "add":
-                self.title_str += r' + File Data'
-            elif qget_cmb_box(self.ui.cmb_file_io) == "use":
-                self.title_str = r'File Data'
+            if self.ui.cmb_file_io.isEnabled():  # File is loaded, data is available
+                if qget_cmb_box(self.ui.cmb_file_io) == "add":
+                    self.title_str += r' + File Data'
+                elif qget_cmb_box(self.ui.cmb_file_io) == "use":
+                    self.title_str = r'File Data'
         # ----------------------------------------------------------------------
 
 
@@ -208,8 +207,6 @@ class Plot_Tran_Stim(QWidget):
             If `add_sig` has the shape (N x 2), the two columns are added as real and
             imaginary values.
             """
-            logger.info(f"Stim: is_cmplx = {np.iscomplexobj(stim)}, {stim.dtype}\n"
-                        f"add_sig: is_cmplx = {np.iscomplexobj(add_sig)}")
             if np.ndim(add_sig) == 0:
                 if add_sig is None or add_sig == 0:
                     return stim
@@ -227,21 +224,23 @@ class Plot_Tran_Stim(QWidget):
                 return stim
             # add_sig is 2D, add it to stimulus as a complex signal
             elif np.ndim(add_sig) == 2:
+                logger.info("add_sig has two channels, casting to complex")
                 stim = stim.astype(complex) + add_sig[:, 0] + 1j * add_sig[:, 1]
                 return stim
 
             # ---
-            # add_sig is complex, cast stim to complex as well before adding
-            if np.any(type(add_sig) == complex):
+            # add_sig contains complex items (the array is always complex),
+            # cast stim to complex as well before adding
+            if np.any(np.iscomplex(add_sig)):
                 logger.info("add_sig is complex")
                 stim = stim.astype(complex) + add_sig
             # add_sig is real and stimulus is complex:
             # -> add add_sig to both real and imaginary part of stimulus
-            elif np.any(type(stim) == complex):
+            elif np.any(np.iscomplex(stim)):
                 logger.info("stim is complex")
-                stim += add_sig + 1j * add_sig
+                stim = stim + add_sig + 1j * add_sig
             else:  # stim and add_sig are real-valued
-                stim += add_sig
+                stim = stim + add_sig
             return stim
 
         # ====================================================================
@@ -250,12 +249,15 @@ class Plot_Tran_Stim(QWidget):
         if N_first == 0:
             # calculate index for T1, only needed for dirac, step and rect
             self.T1_idx = int(np.round(self.ui.T1))
+            self.rad_phi1 = self.ui.phi1 / 180 * pi
+            self.rad_phi2 = self.ui.phi2 / 180 * pi
         # -------------------------------------------------------------------
         # Initialization for current frame
         # -------------------------------------------------------------------
         N_last = N_first + N_frame  # calculate last element index
         frm_slc = slice(N_first, N_last)  # current slice
-        n = np.arange(N_first, N_last)  #  create frame index
+        n = np.arange(N_first, N_last)  #  create frame index vector
+        t = n * fb.fil[0]['T_S']  # create time vector
         noi = 0  # fallback when no noise is selected
         # ====================================================================
 
@@ -264,9 +266,7 @@ class Plot_Tran_Stim(QWidget):
         # calculate stimuli x[n]
         #
         # ######################################################################
-        if self.ui.stim == "none":
-            pass
-        elif qget_cmb_box(self.ui.cmb_file_io) == "use":
+        if self.ui.cmb_file_io.isEnabled() and qget_cmb_box(self.ui.cmb_file_io) == "use":
             if self.x_file is None:
                 logger.warning("No file loaded!")
             # file data is longer than frame, use only a part:
@@ -280,6 +280,9 @@ class Plot_Tran_Stim(QWidget):
                 # file data has been consumed, nothing left to be added
                 pass
             return
+        # ----------------------------------------------------------------------
+        elif self.ui.stim == "none":
+            pass
         # ----------------------------------------------------------------------
         elif self.ui.stim == "dirac":
             if N_first <= self.T1_idx < N_last:
@@ -326,9 +329,13 @@ class Plot_Tran_Stim(QWidget):
                 self.ui.A2 * np.exp(1j * (2 * pi * n * self.ui.f2 + self.rad_phi2))
         # ----------------------------------------------------------------------
         elif self.ui.stim == "diric":
+            # scipy:  diric(x, N) = sin(Nx/2) / N*sin(x/2)
+            # we use: x = 2 pi t = 2 pi f_1 n
+            # diric(x, N) = sin(Nx/2) / N*sin(x/2) with x = 2 pi f_1 n
             x[frm_slc] = self.ui.A1 * diric(
-                (4 * pi * (n - self.ui.T1) * self.ui.f1 + self.rad_phi1 * 2)
-                / self.ui.TW1, self.ui.TW1)
+                (2 * pi * (n - self.ui.T1) * self.ui.f1),
+                self.ui.N1)
+
         # ----------------------------------------------------------------------
         elif self.ui.stim == "chirp":
             if self.ui.T2 == 0:  # sig.chirp is buggy, T_sim cannot be larger than T_end
@@ -352,7 +359,7 @@ class Plot_Tran_Stim(QWidget):
             else:
                 x[frm_slc] = self.ui.A1 * sig.sawtooth(2*pi * n * self.ui.f1 + self.rad_phi1)
         # ----------------------------------------------------------------------
-        elif self.ui.stim == "square":
+        elif self.ui.stim == "rect_per":
             if self.ui.but_stim_bl.isChecked():
                 x[frm_slc] = self.ui.A1 * rect_bl(
                     2 * pi * n * self.ui.f1 + self.rad_phi1, duty=self.ui.stim_par1)
@@ -385,13 +392,18 @@ class Plot_Tran_Stim(QWidget):
                           np.sin(2*pi * n * self.ui.f2 + self.rad_phi2)))
         # ----------------------------------------------------------------------
         elif self.ui.stim == "formula":
-            param_dict = {"A1": self.ui.A1, "A2": self.ui.A2,
-                          "f1": self.ui.f1, "f2": self.ui.f2,
-                          "phi1": self.ui.phi1, "phi2": self.ui.phi2,
-                          "BW1": self.ui.BW1, "BW2": self.ui.BW2,
-                          "f_S": fb.fil[0]['f_S'], "n": n, "j": 1j}
+            param_dict = {
+                "A1": self.ui.A1, "A2": self.ui.A2, "f1": self.ui.f1, "f2": self.ui.f2,
+                "phi1": self.ui.phi1, "phi2": self.ui.phi2,
+                "T1": self.ui.T1, "T2": self.ui.T2, "N1": self.ui.N1, "N2": self.ui.N2,
+                "BW1": self.ui.BW1, "BW2": self.ui.BW2, "f_S": fb.fil[0]['f_S'],
+                "n": n, "t": t, "j": 1j}
 
             x[frm_slc] = safe_numexpr_eval(self.ui.stim_formula, (N_frame,), param_dict)
+            if safe_numexpr_eval.err > 0:
+                qstyle_widget(self.ui.ledStimFormula, 'failed')
+            else:
+                qstyle_widget(self.ui.ledStimFormula, 'normal')
         else:
             logger.error('Unknown stimulus format "{0}"'.format(self.ui.stim))
             return None
@@ -468,7 +480,7 @@ class Plot_Tran_Stim(QWidget):
         # ######################################################################
 
         # Add noise to stimulus when enabled:
-        if noi != 0:
+        if qget_cmb_box(self.ui.cmb_stim_noise) != "none":
             x[frm_slc] = add_signal(x[frm_slc], noi)
 
         # Add DC to stimulus when visible / enabled
@@ -476,7 +488,7 @@ class Plot_Tran_Stim(QWidget):
             x[frm_slc] = add_signal(x[frm_slc], self.ui.DC)
 
         # Add file data to stimulus for combobox setting "add"
-        if qget_cmb_box(self.ui.cmb_file_io) == "add":
+        if self.ui.cmb_file_io.isEnabled() and qget_cmb_box(self.ui.cmb_file_io) == "add":
             if self.x_file is None:
                 logger.warning("No file loaded!")
             # file data is longer than frame, use only a part:

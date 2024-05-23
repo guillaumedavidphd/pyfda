@@ -49,26 +49,31 @@ class IIR_DF1_pyfixp_UI(QWidget):
 
         self.cmb_wq_accu_items = [
             "<span>Set Accumulator word format</span>",
-            ("man", "M", "<span><b>Manual</b> entry</span>"),
-            ("auto", "A",
-             "<span><b>Automatic</b> estimation from coefficients and input word "
-             "formats (worst case estimation).</span>")
+            ("m", "M", "<span><b>Manual</b> entry</span>"),
+            ("a", "A",
+             "<span><b>Automatic</b> worst case estimation from coefficients "
+             "and input word formats.</span>")
             ]
-        self.cmb_wq_accu_init = 'man'
 
         self.cmb_wq_coeffs_a_items = [
             "<span>Number of integer bits</span>",
-            ("man", "M", "<span><b>Manual</b> entry</span>"),
-            ("auto", "A",
+            ("m", "M", "<span><b>Manual</b> entry</span>"),
+            ("a", "A",
              "<span><b>Automatic</b> calculation from largest coefficient.</span>")
             ]
-        self.cmb_wq_coeffs_a_init = 'auto'
+
+        self.cmb_wq_coeffs_b_items = [
+            "<span>Number of integer bits</span>",
+            ("m", "M", "<span><b>Manual</b> entry</span>"),
+            ("a", "A",
+             "<span><b>Automatic</b> calculation from largest coefficient.</span>")
+            ]
 
         self._construct_UI()
         # Construct an instance of the fixpoint filter using the settings from
-        # the 'fxqc' quantizer dict:
-        self.fx_filt = IIR_DF1_pyfixp(fb.fil[0]['fxqc'])
-        self.update_disp()  # initial setting of overflow counter display
+        # the 'fxq' quantizer dict:
+        self.fx_filt = IIR_DF1_pyfixp(fb.fil[0]['fxq'])
+        self.update_ovfl_cnt_all()  # initialize all overflow counters / display
 
     # --------------------------------------------------------------------------
     def _construct_UI(self):
@@ -77,39 +82,43 @@ class IIR_DF1_pyfixp_UI(QWidget):
         output quantization
         """
         # widget for quantization of coefficients 'b'
-        if 'QCB' not in fb.fil[0]['fxqc']:
-            fb.fil[0]['fxqc'].update({'QCB': {}})  # no coefficient settings in dict yet
-            logger.warning("Empty dict / missing key 'fxqc['QCB]'!")
+        if 'QCB' not in fb.fil[0]['fxq']:
+            fb.fil[0]['fxq'].update({'QCB': {}})  # no coefficient settings in dict yet
+            logger.warning("Empty dict / missing key 'fb.fil{0]['fxq']['QCB']'!")
         self.wdg_wq_coeffs_b = FX_UI_WQ(
-            fb.fil[0]['fxqc']['QCB'], wdg_name='wq_coeffs_b',
+            fb.fil[0]['fxq']['QCB'], objectName='fx_ui_wq_iir_df1_coeffs_b',
             label='<b>Coeff. Quantization <i>b<sub>I.F&nbsp;</sub></i>:</b>',
-            MSB_LSB_vis='msb')
+            MSB_LSB_vis='max', cmb_w_vis='on', cmb_w_items=self.cmb_wq_coeffs_b_items)
         layV_wq_coeffs_b = QVBoxLayout()
         layV_wq_coeffs_b.addWidget(self.wdg_wq_coeffs_b)
 
         # widget for quantization of coefficients 'a'
-        if 'QCA' not in fb.fil[0]['fxqc']:
-            fb.fil[0]['fxqc'].update({'QCA': {}})  # no coefficient settings in dict yet
-            logger.warning("Empty dict / missing key 'fxqc['QCA]'!")
+        if 'QCA' not in fb.fil[0]['fxq']:
+            fb.fil[0]['fxq'].update({'QCA': {}})  # no coefficient settings in dict yet
+            logger.warning("Empty dict / missing key 'fb.fil{0]['fxq']['QCA']'!")
         self.wdg_wq_coeffs_a = FX_UI_WQ(
-            fb.fil[0]['fxqc']['QCA'], wdg_name='wq_coeffs_a',
+            fb.fil[0]['fxq']['QCA'], objectName='fx_ui_wq_iir_df1_coeffs_a',
             label='<b>Coeff. Quantization <i>a<sub>I.F&nbsp;</sub></i>:</b>',
-            MSB_LSB_vis='max', cmb_w_vis='on', cmb_w_items=self.cmb_wq_coeffs_a_items,
-            cmb_w_init=self.cmb_wq_coeffs_a_init)
+            MSB_LSB_vis='max', cmb_w_vis='on', cmb_w_items=self.cmb_wq_coeffs_a_items)
         layV_wq_coeffs_a = QVBoxLayout()
         layV_wq_coeffs_a.addWidget(self.wdg_wq_coeffs_a)
-        self.update_coeffs_settings()
+        # calculate wordlength needed for coefficients if required
+        if qget_cmb_box(self.wdg_wq_coeffs_a.cmbW) == 'a':
+            self.calc_wi_coeffs_a()
+        if qget_cmb_box(self.wdg_wq_coeffs_b.cmbW) == 'a':
+            self.calc_wi_coeffs_b()
 
         # widget for accumulator quantization
-        if 'QACC' not in fb.fil[0]['fxqc']:
-            fb.fil[0]['fxqc']['QACC'] = {}
-        set_dict_defaults(fb.fil[0]['fxqc']['QACC'],
-                          {'WI': 0, 'WF': 31, 'W': 32, 'ovfl': 'wrap', 'quant': 'floor'})
+        if 'QACC' not in fb.fil[0]['fxq']:
+            fb.fil[0]['fxq']['QACC'] = {}  # initialize dict settings
+        set_dict_defaults(
+            fb.fil[0]['fxq']['QACC'],
+            {'WI': 0, 'WF': 31, 'ovfl': 'wrap', 'quant': 'floor', 'w_a_m': 'a',
+             'N_over': 0})
         self.wdg_wq_accu = FX_UI_WQ(
-            fb.fil[0]['fxqc']['QACC'], wdg_name='wq_accu',
-            label='<b>Accu Quantizer <i>Q<sub>A&nbsp;</sub></i>:</b>',
-            cmb_w_vis='on', cmb_w_items=self.cmb_wq_accu_items,
-            cmb_w_init=self.cmb_wq_accu_init)
+            fb.fil[0]['fxq']['QACC'], objectName='fx_ui_wq_iir_df1_accu',
+            label='<b>Accu Quantizer <i>Q<sub>ACC&nbsp;</sub></i>:</b>',
+            cmb_w_vis='on', cmb_w_items=self.cmb_wq_accu_items)
         layV_wq_accu = QVBoxLayout()
         layV_wq_accu.addWidget(self.wdg_wq_accu)
 
@@ -139,12 +148,12 @@ class IIR_DF1_pyfixp_UI(QWidget):
         - For locally generated signals (key = 'ui_local_changed'), emit
           `{'fx_sim': 'specs_changed'}` with local id.
         - For external changes, i.e. `{'fx_sim': 'specs_changed'}` or
-          `{'data_changed': xxx}` update the UI via `self.dict_ui`.
+          `{'data_changed': xxx}` update the UI via `self.dict2ui`.
 
         Ignore all other signals
 
         Note: If coefficient / accu quantization settings have been changed in the UI,
-        the referenced dicts `fb.fil[0]['fxqc']['QCB']`, `['QCA']` and `...['QACC']`
+        the referenced dicts `fb.fil[0]['fxq']['QCB']`, `['QCA']` and `...['QACC']`
         have already been updated by the corresponding subwidgets `FX_UI_WQ`
         """
         logger.debug("sig_rx:\n{0}".format(pprint_log(dict_sig)))
@@ -155,21 +164,24 @@ class IIR_DF1_pyfixp_UI(QWidget):
         if 'ui_local_changed' in dict_sig:
             # signal generated locally by modifying coefficient / accu format
             ui_changed = dict_sig['ui_local_changed']  # name of changed ui element
-            if not dict_sig['wdg_name'] in {'wq_coeffs_b', 'wq_coeffs_a', 'wq_accu'}:
-                logger.error(f"Unknown widget name '{dict_sig['wdg_name']}' "
+            if not dict_sig['sender_name']\
+                    in {'fx_ui_wq_iir_df1_coeffs_b', 'fx_ui_wq_iir_df1_coeffs_a',
+                        'fx_ui_wq_iir_df1_accu'}:
+                logger.error(f"Unknown sender name '{dict_sig['sender_name']}' "
                              f"in '{__name__}' !")
                 return
 
-            elif dict_sig['wdg_name'] == 'wq_accu':  # accu format updated
+            # changes in accu widget
+            elif dict_sig['sender_name'] == 'fx_ui_wq_iir_df1_accu':  # accu format updated
                 if ui_changed in {'cmbW', 'WF', 'WI'}:
                     cmbW = qget_cmb_box(self.wdg_wq_accu.cmbW)
-                    if cmbW == 'man':
+                    if cmbW == 'm':
                         if ui_changed == 'cmbW':
                             # returning to manual setting, don't do anything
                             return
                         else:
                             pass  # WI or WF have been edited, emit 'specs_changed'
-                    elif cmbW == 'auto':
+                    elif cmbW == 'a':
                         # when switching to auto settings, run automatic accu calculation
                         # this also reverses manual edits of WI or WF wordlengths
                         # manual entry of word lengths cannot be disabled easily due to
@@ -179,30 +191,54 @@ class IIR_DF1_pyfixp_UI(QWidget):
                         logger.error(f"Unknown accu combobox setting '{cmbW}'!")
                         return
 
-            elif dict_sig['wdg_name'] in {'wq_coeffs_a', 'wq_coeffs_b'}:  # coeffs updated
+            # changes in coeffs 'a' widget
+            elif dict_sig['sender_name'] == 'fx_ui_wq_iir_df1_coeffs_a':
                 if ui_changed in {'cmbW', 'WF', 'WI'}:
                     cmbW = qget_cmb_box(self.wdg_wq_coeffs_a.cmbW)
-                    if cmbW == 'man':
+                    if cmbW == 'm':
                         if ui_changed == 'cmbW':
                             # returning to manual setting, don't do anything
                             return
                         else:
                             pass  # WI or WF have been edited, emit 'specs_changed'
 
-                    elif cmbW == 'auto':
+                    elif cmbW == 'a':
                         # when switching to auto settings, run automatic calculation
                         # of required integer bits for coeffs a
                         # this also reverses manual edits of WI or WF wordlengths
-                        # manual entry of word lengths cannot be disabled easily due to
-                        # additional logic in the wdg_wq_accu widget (class FX_UI_WQ)
-                        self.update_coeffs_settings()
+                        self.calc_wi_coeffs_a()
                     else:
                         logger.error(f"Unknown coeff. combobox setting '{cmbW}'!")
                         return
 
                     # in case coefficient length has been changed, update accu as well
-                    if qget_cmb_box(self.wdg_wq_accu.cmbW) == 'auto':
+                    if qget_cmb_box(self.wdg_wq_accu.cmbW) == 'a':
                         self.update_accu_settings()
+
+            # changes in coeffs 'b' widget
+            elif dict_sig['sender_name'] == 'fx_ui_wq_iir_df1_coeffs_b':
+                if ui_changed in {'cmbW', 'WF', 'WI'}:
+                    cmbW = qget_cmb_box(self.wdg_wq_coeffs_b.cmbW)
+                    if cmbW == 'm':
+                        if ui_changed == 'cmbW':
+                            # returning to manual setting, don't do anything
+                            return
+                        else:
+                            pass  # WI or WF have been edited, emit 'specs_changed'
+
+                    elif cmbW == 'a':
+                        # when switching to auto settings, run automatic calculation
+                        # of required integer bits for coeffs b
+                        # this also reverses manual edits of WI or WF wordlengths
+                        self.calc_wi_coeffs_b()
+                    else:
+                        logger.error(f"Unknown coeff. combobox setting '{cmbW}'!")
+                        return
+
+                    # in case coefficient length has been changed, update accu as well
+                    if qget_cmb_box(self.wdg_wq_accu.cmbW) == 'a':
+                        self.update_accu_settings()
+
 
             # emit signal, replace UI id with id of *this* widget
             self.emit({'fx_sim': 'specs_changed', 'id': id(self)})
@@ -213,18 +249,30 @@ class IIR_DF1_pyfixp_UI(QWidget):
             self.dict2ui()
 
     # --------------------------------------------------------------------------
-    def update_coeffs_settings(self):
+    def calc_wi_coeffs_a(self):
         """
-        Calculate required number of integer bits for the largest coefficient
+        Calculate required number of integer bits for the largest 'a' coefficient
 
         The new value is written to the fixpoint coefficient dict
-        `fb.fil[0]['fxqc']['QCA']` and the UI is updated.
+        `fb.fil[0]['fxq']['QCA']` and the UI is updated.
         """
         WI_A = int(np.ceil(np.log2((np.abs(np.max(fb.fil[0]['ba'][1]))))))
-        fb.fil[0]['fxqc']['QCA']['WI'] = WI_A
-        # update quantization settings ('W', 'Q', ...) and UI
-        self.wdg_wq_coeffs_a.QObj.set_qdict({})  # update `self.wdg_wq_coeffs_a.q_dict`
-        self.wdg_wq_coeffs_a.dict2ui()
+        fb.fil[0]['fxq']['QCA']['WI'] = WI_A
+        # update quantizer settings and UI
+        self.wdg_wq_coeffs_a.dict2ui(fb.fil[0]['fxq']['QCA'])
+
+    # --------------------------------------------------------------------------
+    def calc_wi_coeffs_b(self):
+        """
+        Calculate required number of integer bits for the largest 'b' coefficient
+
+        The new value is written to the fixpoint coefficient dict
+        `fb.fil[0]['fxq']['QCB']` and the UI is updated.
+        """
+        WI_B = int(np.ceil(np.log2((np.abs(np.max(fb.fil[0]['ba'][0]))))))
+        fb.fil[0]['fxq']['QCB']['WI'] = max(WI_B, 0)
+        # update quantizer settings and UI
+        self.wdg_wq_coeffs_b.dict2ui(fb.fil[0]['fxq']['QCB'])
 
     # --------------------------------------------------------------------------
     def update_accu_settings(self):
@@ -239,24 +287,23 @@ class IIR_DF1_pyfixp_UI(QWidget):
         coefficients and input signal, depending on which one is larger.
 
         The new values are written to the fixpoint coefficient dict
-        `fb.fil[0]['fxqc']['QACC']`.
+        `fb.fil[0]['fxq']['QACC']` and the UI is updated.
         """
         # except BaseException as e: # Exception as e:
         #     logger.error("An error occured:", exc_info=True)
         #     return
 
-        if qget_cmb_box(self.wdg_wq_accu.cmbW) == "auto":
-            fb.fil[0]['fxqc']['QACC']['WF'] = max(
-                fb.fil[0]['fxqc']['QI']['WF'] + fb.fil[0]['fxqc']['QCB']['WF'],
-                fb.fil[0]['fxqc']['QO']['WF'] + fb.fil[0]['fxqc']['QCA']['WF'])
+        if qget_cmb_box(self.wdg_wq_accu.cmbW) == 'a':
+            fb.fil[0]['fxq']['QACC']['WF'] = max(
+                fb.fil[0]['fxq']['QI']['WF'] + fb.fil[0]['fxq']['QCB']['WF'],
+                fb.fil[0]['fxq']['QO']['WF'] + fb.fil[0]['fxq']['QCA']['WF'])
 
-            fb.fil[0]['fxqc']['QACC']['WI'] = max(
-                fb.fil[0]['fxqc']['QI']['WI'] + fb.fil[0]['fxqc']['QCB']['WI'],
-                fb.fil[0]['fxqc']['QO']['WI'] + fb.fil[0]['fxqc']['QCA']['WI'])
+            fb.fil[0]['fxq']['QACC']['WI'] = max(
+                fb.fil[0]['fxq']['QI']['WI'] + fb.fil[0]['fxq']['QCB']['WI'],
+                fb.fil[0]['fxq']['QO']['WI'] + fb.fil[0]['fxq']['QCA']['WI'])
 
-        # update quantization settings like 'Q', 'W' etc. and UI
-        self.wdg_wq_accu.QObj.set_qdict({})  # update `self.wdg_wq_accu.q_dict`
-        self.wdg_wq_accu.dict2ui()
+        # update UI and Q.q_dict (quantization settings) from filter dict
+        self.wdg_wq_accu.dict2ui(fb.fil[0]['fxq']['QACC'])
 
     # --------------------------------------------------------------------------
     def dict2ui(self):
@@ -269,21 +316,23 @@ class IIR_DF1_pyfixp_UI(QWidget):
         This is called from one level above by
         :class:`pyfda.input_widgets.input_fixpoint_specs.Input_Fixpoint_Specs`.
         """
-        self.wdg_wq_coeffs_b.dict2ui()  # update coefficient quantization
-        self.wdg_wq_coeffs_a.dict2ui()  # settings
-        self.wdg_wq_accu.dict2ui()
+
+        self.wdg_wq_coeffs_b.dict2ui(fb.fil[0]['fxq']['QCB'])  # update coefficient quantization
+        self.wdg_wq_coeffs_a.dict2ui(fb.fil[0]['fxq']['QCA'])  # settings
+        # TODO: In the past, only 'QCB' was passed directly - why?!
+        self.update_accu_settings()   # update accumulator settings and UI
 
     # --------------------------------------------------------------------------
-    def update_disp(self):
+    def update_ovfl_cnt_all(self):
         """
-        Update the overflow counters etc. of the UI after simulation has finished.
+        Update the overflow counters of the UI after simulation has finished.
 
         This is usually called from one level above by
         :class:`pyfda.input_widgets.input_fixpoint_specs.Input_Fixpoint_Specs`.
         """
-        self.wdg_wq_coeffs_b.update_disp()
-        self.wdg_wq_coeffs_a.update_disp()
-        self.wdg_wq_accu.update_disp()
+        self.wdg_wq_coeffs_b.update_ovfl_cnt()
+        self.wdg_wq_coeffs_a.update_ovfl_cnt()
+        self.wdg_wq_accu.update_ovfl_cnt()
 
     # --------------------------------------------------------------------------
     def fxfilter(self, stimulus):
@@ -305,6 +354,8 @@ if __name__ == '__main__':
 
     app = QApplication(sys.argv)
     app.setStyleSheet(rc.qss_rc)
+    fb.fil[0]['fx_sim'] = True  # enable fixpoint mode
+
     mainw = IIR_DF1_pyfixp_UI()
     app.setActiveWindow(mainw)
     mainw.show()

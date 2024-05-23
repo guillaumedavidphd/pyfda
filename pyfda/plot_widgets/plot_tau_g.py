@@ -81,8 +81,7 @@ class Plot_tau_g(QWidget):
         layHControls.addWidget(self.cmbAlgorithm)
 
         # This widget encompasses all control subwidgets:
-        self.frmControls = QFrame(self)
-        self.frmControls.setObjectName("frmControls")
+        self.frmControls = QFrame(self, objectName="frmControls")
         self.frmControls.setLayout(layHControls)
 
         self.mplwidget = MplWidget(self)
@@ -121,7 +120,7 @@ class Plot_tau_g(QWidget):
             elif 'view_changed' in dict_sig:
                 self.update_view()
             elif 'mpl_toolbar' in dict_sig and dict_sig['mpl_toolbar'] == 'ui_level':
-                self.frmControls.setVisible(dict_sig['value'] == 0)
+                self.frmControls.setVisible(self.mplwidget.mplToolbar.a_ui_level == 0)
 
         else:
             if 'data_changed' in dict_sig or 'view_changed' in dict_sig:

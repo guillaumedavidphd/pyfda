@@ -39,7 +39,7 @@ import scipy.signal as sig
 import numpy as np
 
 import pyfda.filterbroker as fb
-from pyfda.libs.pyfda_qt_lib import qfilter_warning
+from pyfda.libs.pyfda_qt_lib import popup_warning
 from pyfda.libs.pyfda_lib import fil_save, round_odd, ceil_even, safe_eval
 from .common import remezord
 
@@ -80,9 +80,10 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
     sig_tx = pyqtSignal(object)
     from pyfda.libs.pyfda_qt_lib import emit
 
-    def __init__(self):
+    def __init__(self, objectName='equiripple_inst'):
         QWidget.__init__(self)
 
+        self.setObjectName(objectName)
         self.grid_density = 16
 
         self.ft = 'FIR'
@@ -256,7 +257,7 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
         design.
         """
         if self.N > 2000:
-            return qfilter_warning(self, self.N, "Equiripple")
+            return popup_warning(self, self.N, "Equiripple")
         else:
             return True
 
@@ -404,7 +405,9 @@ is estimated from frequency and amplitude specifications using Ichige's algorith
             return -1
         self.N = ceil_even(self.N) # enforce even order
         if self.F_PB < 0.1:
-            logger.warning("Bandwidth for pass band ({0}) is too low, inreasing to 0.1".format(self.F_PB))
+            logger.warning(
+                f"Relative bandwidth {self.F_PB} for pass band is too low, "
+                "inreasing to 0.1.")
             self.F_PB = 0.1
             fil_dict['F_PB'] = self.F_PB
             self.emit({'specs_changed': 'equiripple'})

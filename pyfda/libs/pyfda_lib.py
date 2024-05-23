@@ -9,6 +9,8 @@
 """
 Library with various general functions and variables needed by the pyfda routines
 """
+import logging
+logger = logging.getLogger(__name__)
 
 import os, re, io
 import sys, time
@@ -22,7 +24,9 @@ import markdown
 import scipy.signal as sig
 
 from distutils.version import LooseVersion
+import pyfda.filterbroker as fb
 import pyfda.libs.pyfda_dirs as dirs
+import pyfda.libs.pyfda_sig_lib as pyfda_sig_lib
 
 # ###### VERSIONS and related stuff ############################################
 # ================ Required Modules ============================
@@ -33,9 +37,6 @@ from matplotlib import __version__ as V_MPL
 from .compat import QT_VERSION_STR as V_QT
 from .compat import PYQT_VERSION_STR as V_PYQT
 from markdown import __version__ as V_MD
-
-import logging
-logger = logging.getLogger(__name__)
 
 V_NP = np.__version__
 V_NUM = numexpr.__version__
@@ -88,13 +89,13 @@ try:
     from docutils import __version__ as V_DOC
     MODULES.update({'docutils': {'V_DOC': V_DOC}})
 except ImportError:
-    pass
+    MODULES.update({'docutils': {'V_DOC': "not found"}})
 
 try:
     from mplcursors import __version__ as V_CUR
     MODULES.update({'mplcursors': {'V_CUR': V_CUR}})
 except ImportError:
-    pass
+    MODULES.update({'mplcursors': {'V_CUR': "not found"}})
 
 MODULES.update({'yosys': {'V_YO': dirs.YOSYS_VER}})
 
@@ -102,13 +103,20 @@ try:
     from xlwt import __version__ as V_XLWT
     MODULES.update({'xlwt': {'V_XLWT': V_XLWT}})
 except ImportError:
-    pass
+    MODULES.update({'xlwt': {'V_XLWT': "not found"}})
 
 try:
     from xlsxwriter import __version__ as V_XLSX
     MODULES.update({'xlsx': {'V_XLSX': V_XLSX}})
 except ImportError:
-    pass
+    MODULES.update({'xlsx': {'V_XLSX': "not found"}})
+
+try:
+    from amaranth import __version__ as V_AM
+    MODULES.update({'amaranth': {'V_AM': V_AM}})
+except ImportError:
+    MODULES.update({'amaranth': {'V_AM': "not found"}})
+
 
 # Remove module names as keys and return a dict with items like
 #  {'V_MPL':'3.3.1', ...}
@@ -329,6 +337,26 @@ def qstr(text):
 # General functions ###########################################################
 ###############################################################################
 
+def is_numeric(a) -> bool:
+    """
+    Return True when a or a.dtype is of a numeric type (complex, float, int, ...)
+
+    Parameters
+    ----------
+    a : array-like or scalar
+
+    Returns
+    -------
+    is_num : bool
+        True when dtype of a is a numeric subtype
+    """
+    if isinstance(a, np.ndarray):
+        is_num = np.issubdtype(a.dtype, np.number)
+    else:
+        is_num = np.issubdtype(type(a), np.number)
+    return is_num
+
+
 def np_type(a):
     """
     Return the python type of `a`, either of the parameter itself or (if it's a
@@ -371,19 +399,112 @@ def np_shape(data):
         f"{d} dimensions.")
         return (None, None)
 
+# -----------------------------------------------------------------------------
+def iter2ndarray(iterable, dtype=complex) -> ndarray:
+    """
+    Convert an iterable (tuple, list, dict) to a numpy ndarray, egalizing
+    different lengths of sub-iterables by adding zeros. This prevents
+    problems with inhomogeneous arrays.
+    """
+    try:
+        # logger.warning(iterable)
+        if type(iterable) == np.ndarray:
+            # no need to convert argument
+            return iterable
+        elif type(iterable) in {tuple, list}:
+            arrs = []  # empty list for sub-arrays
+            max_l = 0  # maximum length of sub-arrays
+            for i in range(len(iterable)):
+                if np.isscalar(iterable[i]):
+                    arrs.append(np.array([iterable[i]]))
+                else:
+                    arrs.append(np.array(iterable[i]))
+                max_l = max(max_l, len(arrs[i]))
+
+            # equalize lengths of sub-arrays by filling up with zeros
+            for i in range(len(iterable)):
+                arrs[i] = np.append(arrs[i], np.zeros(max_l - len(arrs[i])))
+
+            return np.nan_to_num(np.array(arrs, dtype=dtype))  # convert list of arrays to two-dimensional array
+        else:
+            logger.error(f"Unsupported type '{type(iterable)}' for conversion to ndarray.")
+            return None
+    except Exception as e:
+        logger.error(f"Error '{e}'\nfor iterable =\n{iterable}")
+        return None
+
 
 # -----------------------------------------------------------------------------
 def set_dict_defaults(d: dict, default_dict: dict) -> None:
     """
-    Add the key:value pairs of `default_dict` to dictionary `d` for all missing
-    keys
+    Add the key:value pairs of `default_dict` to dictionary `d` in-place for
+    all missing keys.
     """
-    if d is None or d == {}:
-        d = default_dict
+    # Create a list of keys to avoid "dictionary size changed" runtime error
+    for k in list(d.keys()):
+        if k not in default_dict:
+            d.pop(k)
+            logger.warning(f"Deleted key '{k}' (not part of default dict).")
+    if d == {}:
+        d.update(default_dict)
     else:
         for k, v in default_dict.items():
             if k not in d:
                 d[k] = v
+
+
+# -------------------------------------------------------------------------------
+def sanitize_imported_dict(new_dict: dict) -> list:
+
+    def compare_dictionaries(
+            ref_dict: dict, new_dict: dict, path: str = "") -> list:
+        """
+        Compare recursively a new dictionary `new_dict` to a reference dictionary `ref_dict`.
+        Keys in `new_dict` that are not contained in `ref_dict` are deleted from `new_dict`,
+        keys in `ref_dict` missing in `new_dict` are copied with their value to `new_dict`.
+
+        Params
+        ------
+        ref_dict: dict
+            reference dictionary
+        new_dict: dict
+            new dictionary
+        path: str
+            current path while traversing through the dictionaries
+
+        Returns
+        -------
+        key_errs: list
+            `key_errs[0]` contains all keys copied from `ref_dict` to `new_dict`.
+            `key_errs[1]` contains all discarded keys from `new_dict`.
+        """
+        key_errs = [[], []]
+        old_path = path
+
+        for k in ref_dict:
+            path = old_path + f"'{k}'"
+            if not k in new_dict:
+                key_errs[0].append(path)
+                new_dict.update({k: ref_dict[k]})
+            else:
+                if isinstance(ref_dict[k], dict) and isinstance(new_dict[k], dict):
+                    key_errs.append(compare_dictionaries(ref_dict[k], new_dict[k], path))
+
+        # emulate slightly inefficient Python 2 way of copying the dict keys to a list
+        # to avoid runtime error "dictionary changed size during iteration" due to new_dict.pop(k)
+        for k in list(new_dict):
+            path = old_path + f"'{k}'"
+            if not k in ref_dict:
+                key_errs[1].append(path)
+                new_dict.pop(k)
+
+        return key_errs
+    # ----------------------------------------
+    key_errs = compare_dictionaries(fb.fil_ref, new_dict)
+    key_errs[0].sort()
+    key_errs[1].sort()
+
+    return key_errs[0], key_errs[1]
 
 
 # -----------------------------------------------------------------------------
@@ -451,12 +572,14 @@ def pprint_log(d, N: int = 10, tab: str = "\t", debug: bool = False) -> str:
             return ""
 
     if type(d) in {list, np.ndarray, tuple}:
-        if np.ndim(d) == 1:
-            s += (f'Type: {type(d).__name__} of {type(d[0]).__name__}, '
-                  f'shape =  ({len(d)},)' + cr + tab)
-            s += str(d[: min(N-1, len(d))])
+        if np.ndim(d) == 0: # iterable with a single element
+            s = str(d) + f' of type: {type(d).__name__}'
+        elif np.ndim(d) == 1:
+            s = cr + tab + str(d[: min(N-1, len(d))])
             if len(d) > N-1:
                 s += ' ...'
+            s += (cr + tab + f'Type: {type(d).__name__} of {type(d[0]).__name__}, '
+                  f'with shape = ({len(d)},)')
         elif np.ndim(d) == 2:
             rows, cols = np.shape(d)
             s += (f'Type: {type(d).__name__} of {type(d[0][0]).__name__}, '
@@ -484,9 +607,9 @@ def pprint_log(d, N: int = 10, tab: str = "\t", debug: bool = False) -> str:
             if len(d) > N-1:
                 s += ' ...'
         elif np.isscalar(d):
-            s += (f'Type: {type(d).__name__}' + cr + tab + str(d))
+            s = str(d) + f' of type: {type(d).__name__}'
         else:
-            s += (f'Type: {type(d).__name__}')
+            s += 'Type: {type(d).__name__}'
     return s
 
 
@@ -517,6 +640,7 @@ def safe_numexpr_eval(expr: str, fallback=None,
         `expr` converted to a numpy array or scalar
 
     """
+    safe_numexpr_eval.err = 0  # function attribute, providing some sort of "memory"
     local_dict.update({'j': 1j, 'None': 0})
     if type(fallback) == tuple:
         np_expr = np.zeros(fallback)  # fallback defines the shape
@@ -528,6 +652,7 @@ def safe_numexpr_eval(expr: str, fallback=None,
     if type(expr) != str or expr == "None":
         logger.warning(f"numexpr: Unsuitable input '{expr}' of type "
                        f"'{type(expr).__name__}', replacing with zero.")
+        safe_numexpr_eval.err = 10
         expr = "0.0"
 
     # Find one or more redundant zeros '0+' at the beginning '^' leading a number [0-9]
@@ -543,16 +668,22 @@ def safe_numexpr_eval(expr: str, fallback=None,
         np_expr = numexpr.evaluate(expr.strip(), local_dict=local_dict)
     except SyntaxError as e:
         logger.warning(f"numexpr: Syntax error:\n\t{e}")
-    except KeyError as e:
-        logger.warning(f"numexpr: Unknown variable {e}")
-    except TypeError as e:
-        logger.warning(f"numexpr: Type error\n\t{e}")
+        safe_numexpr_eval.err = 1
     except AttributeError as e:
         logger.warning(f"numexpr: Attribute error:\n\t{e}")
+        safe_numexpr_eval.err = 2
+    except KeyError as e:
+        logger.warning(f"numexpr: Unknown variable {e}")
+        safe_numexpr_eval.err = 3
+    except TypeError as e:
+        logger.warning(f"numexpr: Type error\n\t{e}")
+        safe_numexpr_eval.err = 4
     except ValueError as e:
         logger.warning(f"numexpr: Value error:\n\t{e}")
+        safe_numexpr_eval.err = 5
     except ZeroDivisionError:
         logger.warning("numexpr: Zero division error in formula.")
+        safe_numexpr_eval.err = 6
 
     if np_expr is None:
         return None  # no fallback, no error checking!
@@ -566,11 +697,15 @@ def safe_numexpr_eval(expr: str, fallback=None,
             # return array of zeros in the shape of the fallback
             logger.warning(
                 f"numexpr: Expression has unexpected dimension {np.ndim(np_expr)}!")
+            safe_numexpr_eval.err = 11
+
             np_expr = np.zeros(fallback_shape)
 
     if np.shape(np_expr) != fallback_shape:
         logger.warning(
             f"numexpr: Expression has unsuitable length {np.shape(np_expr)[0]}!")
+        safe_numexpr_eval.err = 12
+
         np_expr = np.zeros(fallback_shape)
 
     if not type(np_expr.item(0)) in {float, complex}:
@@ -580,7 +715,8 @@ def safe_numexpr_eval(expr: str, fallback=None,
 
 
 # ------------------------------------------------------------------------------
-def safe_eval(expr, alt_expr=0, return_type: str = "float", sign: str = None) -> str:
+def safe_eval(expr, alt_expr=0, return_type: str = "float", sign: str = None
+              ):  # -> complex|float|int: only works with py3.10 upawards
     """
     Try ... except wrapper around numexpr to catch various errors
     When evaluation fails or returns `None`, try evaluating `alt_expr`.
@@ -1392,30 +1528,44 @@ def fil_save(fil_dict: dict, arg, format_in: str, sender: str,
         fil_dict['ft'] = 'IIR'
 
     elif format_in == 'zpk':
-        if any(isinstance(el, list) for el in arg):
-            frmt = "lol"  # list or ndarray or tuple of lists
-        elif any(isinstance(el, np.ndarray) for el in arg):
-            frmt = "lon"  # list or ndarray or tuple of ndarrays
-        elif isinstance(arg, list):
-            frmt = "lst"
-        elif isinstance(arg, np.ndarray):
-            frmt = "nd"
         format_error = False
+        if isinstance(arg, np.ndarray) and np.ndim(arg) == 1:
+            frmt = "nd1" #  one-dimensional numpy array
+            logger.info(f"Format (zpk) is '{frmt}', shape = {np.shape(arg)}")
+        elif isinstance(arg, np.ndarray) and np.ndim(arg) == 2:
+            frmt = "nd2" #  two-dimensional numpy array
+            # logger.info(f"Format (zpk) is '{frmt}', shape = {np.shape(arg)}")
+        # elif any(isinstance(el, list) for el in arg):
+        #     frmt = "lol"  # list or ndarray or tuple of lists
+        elif any(isinstance(el, np.ndarray) for el in arg):
+            frmt = "lon"  # list or tuple of ndarrays
+            logger.warning(f"Format (zpk) is '{frmt}'.")
+        else:
+            format_error = True
 
-        if frmt in {'lst', 'nd'}:  # list / array with z only -> FIR
+        if frmt == "nd2":
+            fil_dict['zpk'] = arg
+            if np.any(arg[1]):  # non-zero poles -> IIR
+                fil_dict['ft'] = 'IIR'
+            else:
+                fil_dict['ft'] = 'FIR'
+
+        elif frmt == 'nd1':  # list / array with z only -> FIR
             z = arg
             p = np.zeros(len(z))
-            k = 1
-            fil_dict['zpk'] = [z, p, k]
+            gain = pyfda_sig_lib.zeros_with_val(len(z))  # create gain vector [1, 0, 0, ...]
+            fil_dict['zpk'] = np.array([z, p, gain])
             fil_dict['ft'] = 'FIR'
-        elif frmt in {'lol', 'lon'}:  # list of lists
+
+        elif frmt == 'lon':  # list of  ndarrays
             if len(arg) == 3:
-                fil_dict['zpk'] = [arg[0], arg[1], arg[2]]
+                fil_dict['zpk'] = np.array([arg[0], arg[1], arg[2]])
                 if np.any(arg[1]):  # non-zero poles -> IIR
                     fil_dict['ft'] = 'IIR'
                 else:
                     fil_dict['ft'] = 'FIR'
             else:
+                logger.error(f"{len(arg)} rows instead of 3!")
                 format_error = True
         else:
             format_error = True
@@ -1490,14 +1640,6 @@ def fil_save(fil_dict: dict, arg, format_in: str, sender: str,
     fil_dict['creator'] = (format_in, sender)
     fil_dict['timestamp'] = time.time()
 
-    # Remove any antiCausal zero/poles
-    if 'zpkA' in fil_dict:
-        fil_dict.pop('zpkA')
-    if 'baA' in fil_dict:
-        fil_dict.pop('baA')
-    if 'rpk' in fil_dict:
-        fil_dict.pop('rpk')
-
     if convert:
         fil_convert(fil_dict, format_in)
 
@@ -1550,16 +1692,20 @@ def fil_convert(fil_dict: dict, format_in) -> None:
 
         if 'zpk' not in format_in:
             try:
-                fil_dict['zpk'] = list(sig.sos2zpk(fil_dict['sos']))
+                # returns a tuple (zeros, poles, gain) where gain is scalar:
+                zpk = list(sig.sos2zpk(fil_dict['sos']))
             except Exception as e:
                 raise ValueError(e)
             # check whether sos conversion has created a additional (superfluous)
             # pole and zero at the origin and delete them:
-            z_0 = np.where(fil_dict['zpk'][0] == 0)[0]
-            p_0 = np.where(fil_dict['zpk'][1] == 0)[0]
+            z_0 = np.where(zpk[0] == 0)[0]
+            p_0 = np.where(zpk[1] == 0)[0]
             if p_0 and z_0:  # eliminate z = 0 and p = 0 from list:
-                fil_dict['zpk'][0] = np.delete(fil_dict['zpk'][0], z_0)
-                fil_dict['zpk'][1] = np.delete(fil_dict['zpk'][1], p_0)
+                zpk[0] = np.delete(zpk[0], z_0)
+                zpk[1] = np.delete(zpk[1], p_0)
+            fil_dict['zpk'] = np.array(
+                [zpk[0], zpk[1], pyfda_sig_lib.zeros_with_val(len(zpk[0]), zpk[2])],
+                dtype=complex)
 
         if 'ba' not in format_in:
             try:
@@ -1576,7 +1722,7 @@ def fil_convert(fil_dict: dict, format_in) -> None:
         zpk = fil_dict['zpk']
         if 'ba' not in format_in:
             try:
-                fil_dict['ba'] = sig.zpk2tf(zpk[0], zpk[1], zpk[2])
+                fil_dict['ba'] = sig.zpk2tf(zpk[0], zpk[1], zpk[2][0])
             except Exception as e:
                 raise ValueError(e)
         if 'sos' not in format_in:
@@ -1591,10 +1737,15 @@ def fil_convert(fil_dict: dict, format_in) -> None:
         b, a = fil_dict['ba'][0], fil_dict['ba'][1]
         if np.all(np.isfinite([b, a])):
             zpk = sig.tf2zpk(b, a)
-            fil_dict['zpk'] = [np.nan_to_num(zpk[0]).astype(complex),
-                               np.nan_to_num(zpk[1]).astype(complex),
-                               np.nan_to_num(zpk[2])
-                               ]
+            if len(zpk[0]) != len(zpk[1]):
+                logger.warning("Bad coefficients, some values of b are too close to zero,"
+                               "\n\tresults may be inaccurate.")
+            zpk_arr = pyfda_sig_lib.zpk2array(zpk)
+            if not type(zpk_arr) is np.ndarray:  # an error has ocurred, error string is returned
+                logger.error(zpk_arr)
+                return
+            else:
+                fil_dict['zpk'] = zpk_arr
         else:
             raise ValueError(
                 "\t'fil_convert()': Cannot convert coefficients with NaN or Inf elements "

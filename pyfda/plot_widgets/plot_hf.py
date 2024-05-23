@@ -69,6 +69,7 @@ class Plot_Hf(QWidget):
 
         if self.isVisible():
             if 'data_changed' in dict_sig or 'specs_changed' in dict_sig\
+                    or 'filt_changed' in dict_sig\
                     or ('mpl_toolbar' in dict_sig and dict_sig['mpl_toolbar'] == 'home')\
                          or self.needs_calc:
                 self.draw()
@@ -78,10 +79,11 @@ class Plot_Hf(QWidget):
                 self.update_view()
                 self.needs_draw = False
             elif 'mpl_toolbar' in dict_sig and dict_sig['mpl_toolbar'] == 'ui_level':
-                self.frmControls.setVisible(dict_sig['value'] == 0)
+                self.frmControls.setVisible(self.mplwidget.mplToolbar.a_ui_level == 0)
 
         else:
-            if 'data_changed' in dict_sig or 'specs_changed' in dict_sig:
+            if 'data_changed' in dict_sig or 'specs_changed' in dict_sig\
+                    or 'filt_changed' in dict_sig:
                 self.needs_calc = True
             if 'view_changed' in dict_sig:
                 self.needs_draw = True
@@ -113,10 +115,9 @@ class Plot_Hf(QWidget):
 
         self.lblIn = QLabel(to_html("Unit:", frmt="b"), self)
 
-        self.cmb_units_a = QComboBox(self)
+        self.cmb_units_a = QComboBox(self, objectName="cmbUnitsA")
         qcmb_box_populate(self.cmb_units_a, self.cmb_units_a_items,
                           self.cmb_units_a_default)
-        self.cmb_units_a.setObjectName("cmbUnitsA")
 
         self.lbl_log_bottom = QLabel(to_html("min =", 'bi'), self)
         self.led_log_bottom = QLineEdit(self)
@@ -134,9 +135,8 @@ class Plot_Hf(QWidget):
             "Attention: This makes no sense for a non-linear phase system!</span>")
 
         self.lblInset = QLabel(to_html("Inset", "bi"), self)
-        self.cmbInset = QComboBox(self)
+        self.cmbInset = QComboBox(self, objectName="cmbInset")
         self.cmbInset.addItems(['off', 'edit', 'fixed'])
-        self.cmbInset.setObjectName("cmbInset")
         self.cmbInset.setToolTip("Display/edit second inset plot")
         self.cmbInset.setCurrentIndex(0)
         self.inset_idx = 0  # store previous index for comparison
@@ -178,8 +178,7 @@ class Plot_Hf(QWidget):
         layHControls.addWidget(self.but_align)
         layHControls.addStretch(10)
 
-        self.frmControls = QFrame(self)
-        self.frmControls.setObjectName("frmControls")
+        self.frmControls = QFrame(self, objectName="frmControls")
         self.frmControls.setLayout(layHControls)
 
         # ----------------------------------------------------------------------
@@ -506,7 +505,7 @@ class Plot_Hf(QWidget):
                 rect = Rectangle((extent.xmin, extent.ymin), extent.width,
                         extent.height, facecolor=rcParams['figure.facecolor'], edgecolor='none',
                         transform=self.mplwidget.fig.transFigure, zorder=-1)
-                self.ax_i.patches.append(rect)
+                self.ax_i.add_patch(rect)
 
                 self.ax_i.set_xlim(fb.fil[0]['freqSpecsRange'])
                 if self.chk_show_H_abs.isChecked():

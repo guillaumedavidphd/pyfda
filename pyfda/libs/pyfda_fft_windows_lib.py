@@ -269,21 +269,21 @@ all_windows_dict = {
             See also: Boxcar and Triangular / Bartlett windows.
             </span>'''
             },
-    'Slepian': {
-        'fn_name': 'slepian',
-        'par': [{
-             'name': 'BW', 'name_tex': r'$BW$',
-             'val': 0.3, 'min': 0, 'max': 100,
-             'tooltip': '<span>Bandwidth</span>'}],
-        'info':
-            '''<span>
-            Used to maximize the energy concentration in the main lobe.
-            Also called the digital prolate spheroidal sequence (DPSS).
-            <br /><br />
+    # 'Slepian': {
+    #     'fn_name': 'slepian',
+    #     'par': [{
+    #          'name': 'BW', 'name_tex': r'$BW$',
+    #          'val': 0.3, 'min': 0, 'max': 100,
+    #          'tooltip': '<span>Bandwidth</span>'}],
+    #     'info':
+    #         '''<span>
+    #         Used to maximize the energy concentration in the main lobe.
+    #         Also called the digital prolate spheroidal sequence (DPSS).
+    #         <br /><br />
 
-            See also: Kaiser window.
-            </span>'''
-        },
+    #         See also: Kaiser window.
+    #         </span>'''
+    #     },
     'Triangular': {
         'fn_name': 'triang',
         'info': bartlett_info
@@ -311,7 +311,7 @@ all_windows_dict = {
     'Ultraspherical': {
         'fn_name': 'pyfda.libs.pyfda_fft_windows_lib.ultraspherical',
         'par': [{
-            'name': '&mu;', 'name_tex': r'$\mu',
+            'name': '&mu;', 'name_tex': r'$\mu$',
             'val': 0.5, 'min': -0.5, 'max': 10,
             'tooltip': '<span>Shape parameter &mu; or &alpha;</span>'
             },
@@ -551,10 +551,11 @@ class QFFTWinSelector(QWidget):
 
     from pyfda.libs.pyfda_qt_lib import emit
 
-    def __init__(self, parent, win_dict):
-        super(QFFTWinSelector, self).__init__(parent)
+    def __init__(self, win_dict, objectName=""):
+        super().__init__()
 
         self.win_dict = win_dict
+        self.setObjectName(objectName)
         self.err = False  # error flag for window calculation
         self._construct_UI()
         self.set_window_name()  # initialize win_dict
@@ -598,16 +599,14 @@ class QFFTWinSelector(QWidget):
 
         # First numeric parameter for FFT window
         self.lbl_win_par_0 = QLabel("Param1")
-        self.led_win_par_0 = QLineEdit(self)
+        self.led_win_par_0 = QLineEdit(self, objectName="ledWinPar1")
         self.led_win_par_0.setText("1")
-        self.led_win_par_0.setObjectName("ledWinPar1")
         self.cmb_win_par_0 = QComboBox(self)
 
         # Second numeric parameter for FFT window
         self.lbl_win_par_1 = QLabel("Param2")
-        self.led_win_par_1 = QLineEdit(self)
+        self.led_win_par_1 = QLineEdit(self, objectName="ledWinPar2")
         self.led_win_par_1.setText("2")
-        self.led_win_par_1.setObjectName("ledWinPar2")
         self.cmb_win_par_1 = QComboBox(self)
 
         layH_main = QHBoxLayout(self)
@@ -782,7 +781,7 @@ class QFFTWinSelector(QWidget):
         try:
             if fn_name == 'dpss':
                 logger.info("dpss!")
-                w = scipy.signal.windows.dpss(N, self.in_dict[win_name]['par'][0]['val'],
+                w = scipy.signal.windows.dpss(N, self.win_dict[win_name]['par'][0]['val'],
                                               sym=sym)
             elif n_par == 0:
                 w = win_fnct(N, sym=sym)
@@ -974,3 +973,18 @@ class QFFTWinSelector(QWidget):
                 self.cmb_win_par_1.setVisible(False)
                 self.led_win_par_1.setText(str(self.win_dict[cur]['par'][1]['val']))
                 self.led_win_par_1.setToolTip(self.win_dict[cur]['par'][1]['tooltip'])
+
+# ------------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    """ Run widget standalone with `python -m pyfda.libs.pyfda_fft_windows` """
+    import sys
+    from pyfda.libs.compat import QApplication
+    from pyfda import pyfda_rc as rc
+
+    app = QApplication(sys.argv)
+    app.setStyleSheet(rc.qss_rc)
+    mainw = QFFTWinSelector(all_windows_dict)
+    app.setActiveWindow(mainw)
+    mainw.show()
+    sys.exit(app.exec_())

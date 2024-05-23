@@ -19,7 +19,8 @@ from pyfda.libs.compat import (
     QTableWidget, QTableWidgetItem, Qt, QVBoxLayout)
 
 from pyfda.libs.pyfda_qt_lib import qget_cmb_box, qstyle_widget
-from pyfda.libs.pyfda_io_lib import qtable2text, qtext2table
+from pyfda.libs.pyfda_io_lib import qtable2csv, data2array, export_fil_data
+from pyfda.libs.pyfda_sig_lib import zeros_with_val, zpk2array
 
 import numpy as np
 from scipy.signal import freqz, zpk2tf
@@ -73,11 +74,11 @@ class ItemDelegate(QStyledItemDelegate):
             option.backgroundBrush.setColor(QColor(100, 0, 0, 80))
 
     # --------------------------------------------------------------------------
-    # def text(self, item):
-    #     """
-    #     Return item text as string transformed by self.displayText()
-    #     """
-    #     return qstr(self.displayText(item.text(), QtCore.QLocale()))
+    def text(self, item):
+        """
+        Return item text as string transformed by self.displayText()
+        """
+        return qstr(self.displayText(item.text(), QtCore.QLocale()))
 
     # --------------------------------------------------------------------------
     def displayText(self, text, locale):
@@ -151,28 +152,6 @@ class ItemDelegate(QStyledItemDelegate):
         self.parent._refresh_table_item(index.row(), index.column())  # refresh table entry
         self.parent._normalize_gain()  # recalculate gain
 
-
-# ===================================================================================
-class ItemDelegateAnti(QStyledItemDelegate):
-    """
-    The following methods are subclassed to replace display and editor of the
-    QTableWidget.
-
-    `displayText()` displays number with n_digits without sacrificing precision of
-    the data stored in the table.
-    """
-    def __init__(self, parent):
-        """
-        Pass instance `parent` of parent class (Input_PZ)
-        """
-        super(ItemDelegateAnti, self).__init__(parent)
-        self.parent = parent  # instance of the parent (not the base) class
-
-    def displayText(self, text, locale):
-        return "{:.{n_digits}g}".format(safe_eval(qstr(text), return_type='cmplx'),
-                                        n_digits=params['FMT_pz'])
-
-
 # ===================================================================================
 class Input_PZ(QWidget):
     """
@@ -189,6 +168,7 @@ class Input_PZ(QWidget):
 
         self.Hmax_last = 1  # initial setting for maximum gain
         self.angle_char = "\u2220"
+        self.pi_char = "pi" # "\u03C0" looks ugly
 
         self.tab_label = "P/Z"
         self.tool_tip = "Display and edit filter poles and zeros."
@@ -206,7 +186,7 @@ class Input_PZ(QWidget):
         #              f"{self.isVisible()}\n{pprint_log(dict_sig)}")
 
         if dict_sig['id'] == id(self):
-            logger.warning("Stopped infinite loop:\n{0}".format(pprint_log(dict_sig)))
+            # logger.warning("Stopped infinite loop:\n{0}".format(pprint_log(dict_sig)))
             return
 
         if 'ui_global_changed' in dict_sig and dict_sig['ui_global_changed'] == 'csv':
@@ -228,10 +208,9 @@ class Input_PZ(QWidget):
         Construct the UI from the table widget and the control part (`self.ui`),
         initialize the widget and setup signal-slot connections and event filters
         """
-        self.tblPZ = QTableWidget(self)
+        self.tblPZ = QTableWidget(self, objectName="tblPZ")
 #        self.tblPZ.setEditTriggers(QTableWidget.AllEditTriggers) # make everything editable
         self.tblPZ.setAlternatingRowColors(True)  # alternating row colors)
-        self.tblPZ.setObjectName("tblPZ")
 
         # highlight when selected:
         self.tblPZ.horizontalHeader().setHighlightSections(True)
@@ -267,7 +246,6 @@ class Input_PZ(QWidget):
         self.ui.cmbPZFrmt.activated.connect(self._refresh_table)
         self.ui.spnDigits.editingFinished.connect(self._refresh_table)
         self.ui.butLoad.clicked.connect(self.load_dict)
-        self.ui.butEnable.clicked.connect(self.load_dict)
 
         self.ui.butSave.clicked.connect(self._save_entries)
         self.ui.cmbNorm.activated.connect(self._normalize_gain)
@@ -276,7 +254,7 @@ class Input_PZ(QWidget):
         self.ui.butAddCells.clicked.connect(self._add_rows)
         self.ui.butClear.clicked.connect(self._clear_table)
 
-        self.ui.butFromTable.clicked.connect(self._export)
+        self.ui.butFromTable.clicked.connect(self.export_table)
         self.ui.butToTable.clicked.connect(self._import)
 
         self.ui.butSetZero.clicked.connect(self._zero_PZ)
@@ -344,7 +322,7 @@ class Input_PZ(QWidget):
         RETURN key.
         """
         if self.spec_edited:
-            self.zpk[2] = safe_eval(source.text(), alt_expr=str(self.zpk[2]))
+            self.zpk[2][0] = safe_eval(source.text(), alt_expr=str(self.zpk[2][0]))
             qstyle_widget(self.ui.butSave, 'changed')
             self.spec_edited = False  # reset flag
 
@@ -361,25 +339,25 @@ class Input_PZ(QWidget):
         self.ui.ledGain.setEnabled(norm == 'None')
         if norm != self.norm_last:
             qstyle_widget(self.ui.butSave, 'changed')
-        if not np.isfinite(self.zpk[2]):
-            self.zpk[2] = 1.
-        self.zpk[2] = np.real_if_close(self.zpk[2]).item()
-        if np.iscomplex(self.zpk[2]):
+        if not np.isfinite(self.zpk[2][0]):
+            self.zpk[2][0] = 1.
+        self.zpk[2][0] = np.real_if_close(self.zpk[2][0]).item()
+        if np.iscomplex(self.zpk[2][0]):
             logger.warning("Casting complex to real for gain k!")
-            self.zpk[2] = np.abs(self.zpk[2])
+            self.zpk[2][0] = np.abs(self.zpk[2][0])
 
         if norm != "None":
-            b, a = zpk2tf(self.zpk[0], self.zpk[1], self.zpk[2])
+            b, a = zpk2tf(self.zpk[0], self.zpk[1], self.zpk[2][0])
             [w, H] = freqz(b, a, whole=True)
             Hmax = max(abs(H))
             if not np.isfinite(Hmax) or Hmax > 1e4 or Hmax < 1e-4:
                 Hmax = 1.
             if norm == "1":
-                self.zpk[2] = self.zpk[2] / Hmax  # normalize to 1
+                self.zpk[2][0] = self.zpk[2][0] / Hmax  # normalize to 1
             elif norm == "Max":
                 if norm != self.norm_last:  # setting has been changed -> 'Max'
                     self.Hmax_last = Hmax  # use current design to set Hmax_last
-                self.zpk[2] = self.zpk[2] / Hmax * self.Hmax_last
+                self.zpk[2][0] = self.zpk[2][0] / Hmax * self.Hmax_last
         self.norm_last = norm  # store current setting of combobox
 
         self._restore_gain()
@@ -392,20 +370,21 @@ class Input_PZ(QWidget):
         Called by eventFilter, _normalize_gain() and _refresh_table()
         """
 
-        if self.ui.butEnable.isChecked():
-            if len(self.zpk) == 3:
-                pass
-            elif len(self.zpk) == 2:  # k is missing in zpk:
-                self.zpk.append(1.)  # use k = 1
-            else:
-                logger.error("P/Z list zpk has wrong length {0}".format(len(self.zpk)))
+        # if self.ui.butEnable.isChecked():
+        if len(self.zpk) == 3:  # number of rows
+            pass
+        elif len(self.zpk) == 2:  # k is missing in zpk:
+            self.zpk.append(zeros_with_val(len(self.zpk[0])))  # add a row with k = 1
+        else:
+            logger.error(f"P/Z array 'self.zpk' has wrong number of rows = {len(self.zpk)}")
+            logger.error(self.zpk)
 
-            k = safe_eval(self.zpk[2], return_type='auto')
+        k = safe_eval(self.zpk[2][0], return_type='auto')
 
-            if not self.ui.ledGain.hasFocus():  # no focus, round the gain
-                self.ui.ledGain.setText(str(params['FMT'].format(k)))
-            else:  # widget has focus, show gain with full precision
-                self.ui.ledGain.setText(str(k))
+        if not self.ui.ledGain.hasFocus():  # no focus, round the gain
+            self.ui.ledGain.setText(str(params['FMT'].format(k)))
+        else:  # widget has focus, show gain with full precision
+            self.ui.ledGain.setText(str(k))
 
     # ------------------------------------------------------------------------------
     def _refresh_table_item(self, row, col):
@@ -427,7 +406,8 @@ class Input_PZ(QWidget):
         desired number format.
 
         TODO:
-        Update zpk[2]?
+        - Update zpk[2][0]?
+        - Remove butEnable part
 
         Called by: load_dict(), _clear_table(), _zero_PZ(), _delete_cells(),
                 add_row(), _import()
@@ -435,30 +415,30 @@ class Input_PZ(QWidget):
 
         params['FMT_pz'] = int(self.ui.spnDigits.text())
 
-        self.tblPZ.setVisible(self.ui.butEnable.isChecked())
+        # self.tblPZ.setVisible(self.ui.butEnable.isChecked())
+        self.tblPZ.setVisible(True)
 
-        if self.ui.butEnable.isChecked():
+        if True: # self.ui.butEnable.isChecked():
 
-            self.ui.butEnable.setIcon(QIcon(':/circle-check.svg'))
+            # self.ui.butEnable.setIcon(QIcon(':/circle-check.svg'))
 
             self._restore_gain()
 
             self.tblPZ.setHorizontalHeaderLabels(["Zeros", "Poles"])
-            self.tblPZ.setRowCount(max(len(self.zpk[0]), len(self.zpk[1])))
+            self.tblPZ.setRowCount(len(self.zpk[0]))
 
             self.tblPZ.blockSignals(True)
             for col in range(2):
                 for row in range(len(self.zpk[col])):
                     self._refresh_table_item(row, col)
-
             self.tblPZ.blockSignals(False)
 
             self.tblPZ.resizeColumnsToContents()
             self.tblPZ.resizeRowsToContents()
             self.tblPZ.clearSelection()
 
-        else:  # disable widgets
-            self.ui.butEnable.setIcon(QIcon(':/circle-x.svg'))
+        # else:  # disable widgets
+        #     self.ui.butEnable.setIcon(QIcon(':/circle-x.svg'))
 
     # ------------------------------------------------------------------------------
     def load_dict(self):
@@ -476,8 +456,35 @@ class Input_PZ(QWidget):
         The filter dict fb.fil[0]['zpk'] is a list of numpy float ndarrays for z / p / k
         values `self.zpk` is an array of float ndarrays with different lengths of
         z / p / k subarrays to allow adding / deleting items.
+
+        Format is: [array[zeros, ...], array[poles, ...], k]
         """
-        self.zpk = np.array(fb.fil[0]['zpk'], dtype=object)  # this enforces a deep copy
+        if not type(fb.fil[0]['zpk']) is np.ndarray:
+            logger.warning(f"fb.fil[0]['zpk'] is of type {type(fb.fil[0]['zpk'])} "
+                           f"with len = {len(fb.fil[0]['zpk'])}")
+
+        zpk = list(fb.fil[0]['zpk']).copy()
+
+        if len(zpk) == 3:  # number of rows
+            if np.isscalar(zpk[2]):
+                logger.warning("Gain is scalar, converting to proper format!")
+                zpk[2] = zeros_with_val(len(zpk[0]), zpk[2])  # add a row gain
+            elif len(zpk[2]) != len(zpk[0]):
+                zpk[2] = zeros_with_val(len(zpk[0]), zpk[2][0])
+        elif len(zpk) == 2:  # k is missing in zpk:
+            zpk.append(zeros_with_val(len(zpk[0])))  # add a row with k = 1
+        else:
+            logger.error("P/Z array 'fb.fil[0]['zpk']' has wrong number of "
+                         f"rows = {len(zpk)}")
+            logger.error(zpk)
+            return
+
+        if len(zpk[0]) != len(zpk[1]):
+            logger.warning("fb.fil[0]['zpk'] has differing row lengths, "
+                           f"{len(fb.fil[0]['zpk'][0])} != {len(fb.fil[0]['zpk'][1])}")
+            return
+        # logger.warning(f"New shape (zpk) = {np.shape(zpk)}")
+        self.zpk = np.array(zpk)  # this enforces a deep copy
         qstyle_widget(self.ui.butSave, 'normal')
         self._refresh_table()
 
@@ -487,9 +494,6 @@ class Input_PZ(QWidget):
         Save the values from self.zpk to the filter PZ dict,
         the QLineEdit for setting the gain has to be treated separately.
         """
-
-        logger.debug("_save_entries called")
-
         fb.fil[0]['N'] = len(self.zpk[0])
         if np.any(self.zpk[1]):  # any non-zero poles?
             fb.fil[0]['fc'] = 'Manual_IIR'
@@ -511,10 +515,8 @@ class Input_PZ(QWidget):
 
         qstyle_widget(self.ui.butSave, 'normal')
 
-        logger.debug("b,a = {0}\n\n"
-                     "zpk = {1}\n"
-                     .format(pformat(fb.fil[0]['ba']), pformat(fb.fil[0]['zpk'])
-                             ))
+        logger.debug(f"b,a = {fb.fil[0]['ba']}\n\n"
+                     f"zpk = {pformat(fb.fil[0]['zpk'])}\n")
 
     # ------------------------------------------------------------------------------
     def _clear_table(self):
@@ -522,9 +524,8 @@ class Input_PZ(QWidget):
         Clear & initialize table and zpk for two poles and zeros @ origin,
         P = Z = [0; 0], k = 1
         """
-        self.zpk = np.array([[0, 0], [0, 0], 1], dtype=object)
+        self.zpk = np.array([[0, 0], [0, 0], [1, 0]], dtype=complex)
         self.Hmax_last = 1.0
-        self.anti = False
 
         qstyle_widget(self.ui.butSave, 'changed')
         self._refresh_table()
@@ -559,29 +560,42 @@ class Input_PZ(QWidget):
         - deleting all P/Z pairs
         Finally, the table is refreshed from self.zpk.
         """
-        sel = self._get_selected(self.tblPZ)['idx']  # get all selected indices
-        Z = [s[1] for s in sel if s[0] == 0]  # all selected indices in 'Z' column
-        P = [s[1] for s in sel if s[0] == 1]  # all selected indices in 'P' column
+        sel = self._get_selected(self.tblPZ)['idx']  # get selected indices as 2D list
+        sel_z = [s[1] for s in sel if s[0] == 0]  # list with sel. indices in 'Z' column
+        sel_p = [s[1] for s in sel if s[0] == 1]  # list with sel. indices in 'P' column
+
+        k = self.zpk[2][0]
 
         # Delete array entries with selected indices. If nothing is selected
-        # (Z and P are empty), delete the last row.
-        if len(Z) < 1 and len(P) < 1:
-            Z = [len(self.zpk[0])-1]
-            P = [len(self.zpk[1])-1]
-        self.zpk[0] = np.delete(self.zpk[0], Z)
-        self.zpk[1] = np.delete(self.zpk[1], P)
+        # (sel_z and sel_p are empty), delete the last row.
+        if len(sel_z) < 1 and len(sel_p) < 1:
+            sel_z = [len(self.zpk[0])-1]
+            sel_p = [len(self.zpk[1])-1]
+        zeros = np.delete(self.zpk[0], sel_z)
+        poles = np.delete(self.zpk[1], sel_p)
 
-        # test and equalize if P and Z array have different lengths:
-        D = len(self.zpk[0]) - len(self.zpk[1])
-        if D > 0:
-            self.zpk[1] = np.append(self.zpk[1], np.zeros(D))
-        elif D < 0:
-            self.zpk[0] = np.append(self.zpk[0], np.zeros(-D))
+        # If resulting poles and zeros are empty, re-initialize using
+        # `self._clear_table()`. This also refreshes the table and marks
+        # the "Save" button as changed.
+        if len(zeros) == 0 and len(poles) == 0:
+            self._clear_table()
+        else:
+            # test and equalize if P and Z array have different lengths:
+            D = len(zeros) - len(poles)
+            if D > 0:
+                poles = np.append(poles, np.zeros(D))
+            elif D < 0:
+                zeros = np.append(zeros, np.zeros(-D))
 
-        self._delete_PZ_pairs()
-        self._normalize_gain()
-        qstyle_widget(self.ui.butSave, 'changed')
-        self._refresh_table()
+            gain = zeros_with_val(max(len(poles), len(zeros)), k)
+
+            # reconstruct array with new number of rows
+            self.zpk = np.array([zeros, poles, gain])
+
+            self._delete_PZ_pairs()
+            self._normalize_gain()
+            qstyle_widget(self.ui.butSave, 'changed')
+            self._refresh_table()
 
     # ------------------------------------------------------------------------------
     def _add_rows(self):
@@ -591,14 +605,12 @@ class Input_PZ(QWidget):
         """
         row = self.tblPZ.currentRow()
         sel = len(self._get_selected(self.tblPZ)['rows'])
-        # TODO: evaluate and create non-contiguous selections as well?
 
         if sel == 0:  # nothing selected ->
             sel = 1  # add at least one row ...
-            row = min(len(self.zpk[0]), len(self.zpk[1]))  # ... at the bottom
+            row = len(self.zpk[0]) # ... at the bottom
 
-        self.zpk[0] = np.insert(self.zpk[0], row, np.zeros(sel))
-        self.zpk[1] = np.insert(self.zpk[1], row, np.zeros(sel))
+        self.zpk = np.insert(self.zpk, row, np.zeros((sel, 1)), axis=1)
 
         self._refresh_table()
 
@@ -654,16 +666,30 @@ class Input_PZ(QWidget):
         Find and delete pairs of poles and zeros in self.zpk
         The filter dict and the table have to be updated afterwards.
         """
-        for z in range(len(self.zpk[0])-1, -1, -1):  # start at the bottom
-            for p in range(len(self.zpk[1])-1, -1, -1):
-                if np.isclose(self.zpk[0][z], self.zpk[1][p], rtol=0, atol=self.ui.eps):
-                    self.zpk[0] = np.delete(self.zpk[0], z)
-                    self.zpk[1] = np.delete(self.zpk[1], p)
+        zeros = self.zpk[0]
+        poles = self.zpk[1]
+        gain = self.zpk[2]
+        changed = False
+        for z in range(len(zeros)-1, -1, -1):  # start at the bottom
+            for p in range(len(poles)-1, -1, -1):
+                if np.isclose(zeros[z], poles[p], rtol=0, atol=self.ui.eps):
+                    # zeros / poles to be deleted have values != 0, mark as changed
+                    if zeros[z] != 0 and poles[p] != 0:
+                        changed = True
+                    zeros = np.delete(zeros, z)
+                    poles = np.delete(poles, p)
+                    gain = np.delete(gain, -1)  # delete last element (= 0)
                     break  # ... out of loop
 
-        if len(self.zpk[0]) < 1:  # no P / Z, add 1 row
-            self.zpk[0] = np.append(self.zpk[0], 0.)
-            self.zpk[1] = np.append(self.zpk[1], 0.)
+        if len(zeros) < 1:  # no P / Z, add 1 row
+            zeros = [0]
+            poles = [0]
+            gain = [1]
+
+        self.zpk = np.array((zeros, poles, gain))
+
+        if changed:
+            qstyle_widget(self.ui.butSave, 'changed')  # mark save button as changed
 
     # ------------------------------------------------------------------------------
     def cmplx2frmt(self, text, places=-1):
@@ -692,35 +718,33 @@ class Input_PZ(QWidget):
         elif frmt == 'polar_rad':
             r, phi = np.absolute(data), np.angle(data, deg=False)
             if full_prec:
-                return "{r} * {angle_char}{p} rad"\
-                    .format(r=r, p=phi, angle_char=self.angle_char)
+                return f"{r} {self.angle_char}{phi} rad"
             else:
-                return "{r:.{plcs}g} * {angle_char}{p:.{plcs}g} rad"\
+                return "{r:.{plcs}g} {angle_char}{p:.{plcs}g} rad"\
                     .format(r=r, p=phi, plcs=places, angle_char=self.angle_char)
 
         elif frmt == 'polar_deg':
             r, phi = np.absolute(data), np.angle(data, deg=True)
             if full_prec:
-                return "{r} * {angle_char}{p}°"\
-                    .format(r=r, p=phi, angle_char=self.angle_char)
+                return f"{r} {self.angle_char}{phi}°"
             else:
-                return "{r:.{plcs}g} * {angle_char}{p:.{plcs}g}°"\
+                return "{r:.{plcs}g} {angle_char}{p:.{plcs}g}°"\
                     .format(r=r, p=phi, plcs=places, angle_char=self.angle_char)
 
         elif frmt == 'polar_pi':
             r, phi = np.absolute(data), np.angle(data, deg=False) / np.pi
             if full_prec:
-                return "{r} * {angle_char}{p} pi"\
-                    .format(r=r, p=phi, angle_char=self.angle_char)
+                return f"{r} {self.angle_char}{phi} {self.pi_char}"
             else:
-                return "{r:.{plcs}g} * {angle_char}{p:.{plcs}g} pi"\
-                    .format(r=r, p=phi, plcs=places, angle_char=self.angle_char)
+                return "{r:.{plcs}g} {angle_char}{p:.{plcs}g} {pi_char}"\
+                    .format(r=r, p=phi, plcs=places, angle_char=self.angle_char,
+                            pi_char=self.pi_char)
 
         else:
             logger.error("Unknown format {0}.".format(frmt))
 
     # ------------------------------------------------------------------------------
-    def frmt2cmplx(self, string, default=0.):
+    def frmt2cmplx(self, string: str, default: float = 0.) -> complex:
         """
         Convert string to real or complex, try to find out the format (cartesian,
         polar with various angle formats)
@@ -740,8 +764,9 @@ class Input_PZ(QWidget):
                 scale = np.pi
                 string = re.sub('π$|pi$|p$', '', string)
             else:
+                # this case also works when angle is a pure number
                 scale = 1.  # angle in rad
-                string = re.sub('rad', '', string)
+                string = re.sub('rad$|r$', '', string)
 
             phi = safe_eval(string) * scale
             return phi
@@ -778,22 +803,28 @@ class Input_PZ(QWidget):
             return x + 1j * y
 
     # --------------------------------------------------------------------------
-    def _export(self):
+    def export_table(self):
         """
         Export data from coefficient table `self.tblCoeff` to clipboard in CSV format
         or to file using a selected format
         """
-        # pass table instance, numpy data and current class for accessing the
-        # clipboard instance or for constructing a QFileDialog instance
-        qtable2text(self.tblPZ, self.zpk, self, 'zpk', title="Export Poles / Zeros")
-
+        text = qtable2csv(
+            self.tblPZ, self.zpk, zpk=True, formatted=self.ui.but_format.isChecked())
+        if params['CSV']['destination'] == 'clipboard':
+            # clipboard is selected as export target
+            fb.clipboard.setText(text)
+        else:
+            # pass csv formatted text, key for accessing data in ``*.npz`` file or
+            # Matlab workspace (``*.mat``) and a title for the file export dialog
+            export_fil_data(self, text, 'zpk', title="Export Poles / Zeros")
     # --------------------------------------------------------------------------
     def _import(self):
         """
         Import data from clipboard / file and copy it to `self.zpk` as array of complex
         # TODO: More checks for swapped row <-> col, single values, wrong data type ...
         """
-        data_str = qtext2table(self, 'zpk', title="Import Poles / Zeros ")
+        data_str = data2array(self, 'zpk', title="Import Poles / Zeros ",
+                              as_str = self.ui.but_format.isChecked())
         if data_str is None:  # file operation has been aborted
             return
 
@@ -809,53 +840,37 @@ class Input_PZ(QWidget):
         else:
             logger.error("Imported data is a single value or None.")
             return None
-        logger.debug("_import: c x r:", num_cols, num_rows)
+        logger.info(f"_import: c x r = {num_cols} x {num_rows}")
+        zpk = [[], [], []]
+
         if orientation_horiz:
-            self.zpk = [[], []]
             for c in range(num_cols):
-                self.zpk[0].append(conv(data_str[c][0]))
+                zpk[0].append(conv(data_str[c][0]))
                 if num_rows > 1:
-                    self.zpk[1].append(conv(data_str[c][1]))
+                    zpk[1].append(conv(data_str[c][1]))
+                if num_rows > 2:
+                    zpk[2].append(conv(data_str[c][2]))
         else:
-            self.zpk[0] = [conv(s) for s in data_str[0]]
-            if num_cols > 1:
-                self.zpk[1] = [conv(s) for s in data_str[1]]
-            else:
-                self.zpk[1] = [1]
+            zpk[0] = [conv(s) for s in data_str[0]]
+            if num_cols == 1:
+                zpk[1] = [1]
+            elif num_cols > 1:
+                zpk[1] = [conv(s) for s in data_str[1]]
+            if num_cols > 2:
+                zpk[2] = [conv(s) for s in data_str[2]]
 
-        self.zpk[0] = np.asarray(self.zpk[0])
-        self.zpk[1] = np.asarray(self.zpk[1])
-
-        self._equalize_columns()
-        qstyle_widget(self.ui.butSave, 'changed')
-        self._refresh_table()
-
-    # ------------------------------------------------------------------------------
-    def _equalize_columns(self):
-        """
-        test and equalize if P and Z subarray have different lengths:
-        """
-        try:
-            p_len = len(self.zpk[1])
-        except IndexError:
-            p_len = 0
-
-        try:
-            z_len = len(self.zpk[0])
-        except IndexError:
-            z_len = 0
-
-        D = z_len - p_len
-
-        if D > 0:  # more zeros than poles
-            self.zpk[1] = np.append(self.zpk[1], np.zeros(D))
-        elif D < 0:  # more poles than zeros
-            self.zpk[0] = np.append(self.zpk[0], np.zeros(-D))
-#            if fb.fil[0]['ft'] == 'IIR':
-#                self.zpk[0] = np.append(self.zpk[0], np.zeros(-D))
-#            else:
-#                self.zpk[1] = self.zpk[1][:D] # discard last D elements of a
-
+        # sanitize zpk; test and equalize if P and Z lists have different lengths,
+        # convert gain to a vector wth same length as zpk[0]
+        zpk_arr = zpk2array(zpk)
+        if not type(zpk_arr) is np.ndarray:  # an error has ocurred, error string is returned
+            logger.error(zpk_arr)
+            qstyle_widget(self.ui.butSave, 'error')
+            return
+        else:
+            logger.warning(pprint_log(zpk_arr))
+            self.zpk = zpk_arr
+            qstyle_widget(self.ui.butSave, 'changed')
+            self._refresh_table()
 
 # ------------------------------------------------------------------------------
 if __name__ == '__main__':

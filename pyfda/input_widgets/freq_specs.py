@@ -10,12 +10,13 @@
 Subwidget for entering frequency specifications
 """
 import sys
+import re
 from pyfda.libs.compat import (
     QtCore, Qt, QWidget, QLabel, QLineEdit, QFrame, QFont, QVBoxLayout, QHBoxLayout,
     QGridLayout, pyqtSignal, QEvent)
 
 import pyfda.filterbroker as fb
-from pyfda.libs.pyfda_lib import to_html, safe_eval, unique_roots
+from pyfda.libs.pyfda_lib import to_html, safe_eval, unique_roots, pprint_log, first_item
 from pyfda.libs.pyfda_qt_lib import qstyle_widget
 from pyfda.pyfda_rc import params  # FMT string for QLineEdit fields, e.g. '{:.3g}'
 
@@ -23,9 +24,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 MIN_FREQ_STEP = 1e-4
-MIN_FREQ = 0.0  # min. frequency
-MAX_FREQ = 0.5  # max. frequency (normalize w.r.t. f_S)
-
 
 class FreqSpecs(QWidget):
     """
@@ -37,7 +35,7 @@ class FreqSpecs(QWidget):
     sig_rx = pyqtSignal(object)  # incoming
     from pyfda.libs.pyfda_qt_lib import emit
 
-    def __init__(self, parent=None, title="Frequency Specs"):
+    def __init__(self, parent=None, title="Frequency Specs", objectName=""):
 
         super(FreqSpecs, self).__init__(parent)
         self.title = title
@@ -46,6 +44,7 @@ class FreqSpecs(QWidget):
         self.qlineedit = []  # list with references to QLineEdit widgetss
 
         self.spec_edited = False  # flag whether QLineEdit field has been edited
+        self.setObjectName(objectName)
 
         self._construct_UI()
 
@@ -54,15 +53,16 @@ class FreqSpecs(QWidget):
         """
         Process signals coming in via subwidgets and sig_rx
         """
-        # logger.debug("Processing {0}: {1}".format(type(dict_sig).__name__, dict_sig))
+        # logger.warning(
+        #     f"SIG_RX: {first_item(dict_sig)}")
         if dict_sig['id'] == id(self):
             # logger.warning("Stopped infinite loop:\n{0}".format(pprint_log(dict_sig)))
             return
-        elif 'specs_changed' in dict_sig and dict_sig['specs_changed'] == 'f_specs':
-            self.sort_dict_freqs()
-        elif 'view_changed' in dict_sig and dict_sig['view_changed'] == 'f_S':
+        elif ('view_changed' in dict_sig and dict_sig['view_changed'] == 'f_S')\
+                or ('data_changed' in dict_sig
+                and dict_sig['data_changed'] in {'filter_loaded', 'filter_designed'}):
+            # update frequencies and unit and load_dict.
             self.recalc_freqs()
-            # self.load_dict()
 
 # -------------------------------------------------------------
     def _construct_UI(self):
@@ -134,9 +134,9 @@ class FreqSpecs(QWidget):
         if isinstance(source, QLineEdit):  # could be extended for other widgets
             if event.type() == QEvent.FocusIn:
                 self.spec_edited = False
-                self.load_dict()
                 # store current entry in case new value can't be evaluated:
-                fb.data_old = source.text()
+                self.data_prev = source.text()
+                self.update_f_display(source)
             elif event.type() == QEvent.KeyPress:
                 self.spec_edited = True  # entry has been changed
                 key = event.key()
@@ -144,8 +144,7 @@ class FreqSpecs(QWidget):
                     self._store_entry(source)
                 elif key == QtCore.Qt.Key_Escape:  # revert changes
                     self.spec_edited = False
-                    self.load_dict()
-
+                    self.update_f_display(source)
             elif event.type() == QEvent.FocusOut:
                 self._store_entry(source)
         # Call base class method to continue normal event processing:
@@ -154,28 +153,27 @@ class FreqSpecs(QWidget):
     # --------------------------------------------------------------------------
     def _store_entry(self, event_source):
         """
-        _store_entry is triggered by `QEvent.focusOut` in the eventFilter:
-        When the textfield of `widget` has been edited (`self.spec_edited` =  True),
-        sort and store all entries in filter dict, then reload the text fields.
-        Finally, emit a SpecsChanged signal.
+        `_store_entry()` is triggered by `QEvent.focusOut` in the eventFilter:
+        When the `event_source` has been edited (`self.spec_edited ==  True`),
+        evaluate the text field, normalize it with f_S and store it in the filter
+        dict. Sort and store all entries in filter dict, then reload the text fields.
+        Finally, emit a 'specs_changed': 'f_specs' signal.
         """
         if self.spec_edited:
             f_label = str(event_source.objectName())
             f_value = safe_eval(
-                event_source.text(), fb.data_old, sign='pos') / fb.fil[0]['f_S']
+                event_source.text(), self.data_prev, sign='pos') / fb.fil[0]['f_S']
             fb.fil[0].update({f_label: f_value})
-            self.sort_dict_freqs()
-            self.emit({'specs_changed': 'f_specs'})
+            self.sort_dict_freqs()  # sort and update display
+            self.emit({'specs_changed': 'f_specs', 'sender_name': f_label})
             self.spec_edited = False  # reset flag
-
-        # nothing has changed, but display frequencies in rounded format anyway
         else:
-            self.load_dict()
+            self.update_f_display(event_source)  # just update / restore display
 
     # --------------------------------------------------------------------------
     def update_UI(self, new_labels=()):
         """
-        Called from filter_specs.update_UI() and target_specs.update_UI()
+        Called by `input_specs.update_UI()` and `target_specs.update_UI()`
         Set labels and get corresponding values from filter dictionary.
         When number of entries has changed, the layout of subwidget is rebuilt,
         using
@@ -187,7 +185,6 @@ class FreqSpecs(QWidget):
         - `self.n_cur_labels`, the number of currently visible labels / qlineedit
           fields
         """
-        self.update_f_unit()
         state = new_labels[0]
         new_labels = new_labels[1:]
         num_new_labels = len(new_labels)
@@ -197,18 +194,14 @@ class FreqSpecs(QWidget):
 #        W_lbl = max([self.qfm.width(l) for l in new_labels]) # max. label width in pixel
 
         # ---------------------------- logging -----------------------------
-        logger.debug("update_UI: {0}-{1}-{2}".format(
-                            fb.fil[0]['rt'], fb.fil[0]['fc'], fb.fil[0]['fo']))
+        # logger.debug("update_UI: {0}-{1}-{2}".format(
+        #                     fb.fil[0]['rt'], fb.fil[0]['fc'], fb.fil[0]['fo']))
 
         f_range = " (0 &lt; <i>f</i> &lt; <i>f<sub>S </sub></i>/2)"
         for i in range(num_new_labels):
             # Update ALL labels and corresponding values
-            if fb.fil[0]['freq_specs_unit'] in {"f_S", "f_Ny"}:
-                self.qlabels[i].setText(to_html(new_labels[i], frmt='bi'))
-            else:  # convert 'F' to 'f' for frequencies in Hz
-                self.qlabels[i].setText(
-                    to_html(new_labels[i][0].lower() + new_labels[i][1:], frmt='bi'))
-
+            self.qlabels[i].setText(
+                to_html(new_labels[i][0].lower() + new_labels[i][1:], frmt='bi'))
             self.qlineedit[i].setText(str(fb.fil[0][new_labels[i]]))
             self.qlineedit[i].setObjectName(new_labels[i])  # update ID
             qstyle_widget(self.qlineedit[i], state)
@@ -229,25 +222,25 @@ class FreqSpecs(QWidget):
     # --------------------------------------------------------------------------
     def recalc_freqs(self):
         """
-        Update normalized frequencies if required. This is called by via signal
-        ['view_changed': 'f_S']
+        Update normalized frequencies when absolute frequencies are locked and
+        update frequency unit. This is called by via signal {'view_changed': 'f_S'}.
         """
         if fb.fil[0]['freq_locked']:
             for i in range(len(self.qlineedit)):
                 f_name = str(self.qlineedit[i].objectName()).split(":", 1)
                 f_label = f_name[0]
                 f_value = fb.fil[0][f_label] * fb.fil[0]['f_S_prev'] / fb.fil[0]['f_S']
+                # logger.warning(f"Updating freq_specs: f_S = {fb.fil[0]['f_S']}, "
+                #                f"f_S_prev = {fb.fil[0]['f_S_prev']}\n{f_label}: {f_value}")
 
                 fb.fil[0].update({f_label: f_value})
-                self.sort_dict_freqs()
-
             self.emit({'specs_changed': 'f_specs'})
 
-# -------------------------------------------------------------
-    def update_f_unit(self):
-        """
-        Set label for frequency unit according to selected unit.
-        """
+        # Always reload normalized frequencies from dict, check whether they are outside
+        # the Nyquist range and display them in the selected unit.
+        self.load_dict()
+
+        # Always set label for frequency unit according to selected unit.
         unit = fb.fil[0]['plt_fUnit']
         if unit in {"f_S", "f_Ny"}:
             unit_frmt = 'bi'
@@ -256,42 +249,83 @@ class FreqSpecs(QWidget):
         self.lblUnit.setText(" in " + to_html(unit, frmt=unit_frmt))
 
 # -------------------------------------------------------------
+    def update_f_display(self, source):
+        """
+        Update frequency display when frequency or sampling frequency has been
+        updated. Depending on whether it has focus or not, the value is displayed
+        with full precision or rounded.
+
+        Triggered by
+        """
+        f_name = str(source.objectName()).split(':', 1)
+        f_label = f_name[0]
+        f_value = fb.fil[0][f_label] * fb.fil[0]['f_S']
+
+        if source.hasFocus():
+            # widget has focus, show full precision
+            # logger.warning(f"freq_specs: update_f_display {f_label}: {f_value} (disp) "
+            #                 f"{fb.fil[0][f_label]} (dict) FOK")
+            source.setText(str(f_value))
+        else:
+            # widget has no focus, round the display
+            # logger.warning(f"freq_specs: update_f_display {f_label}: {f_value} (disp) "
+            #                f"{fb.fil[0][f_label]} (dict) NFOK")
+            source.setText(params['FMT'].format(f_value))
+
+        # Check whether normalized freqs are inside the range ]0, 0.5[. If not, highlight
+        # widget.
+        if fb.fil[0][f_label] <= 0:
+            logger.warning(
+                f"Frequency {str(source.objectName())} has to be >= 0")
+            source.setProperty("state", 'failed')
+        elif fb.fil[0][f_label] >= 0.5:
+            logger.warning(
+                f"Frequency {str(source.objectName())} has to be < f_S /2.")
+            qstyle_widget(source, 'failed')
+        else:
+            qstyle_widget(source, 'normal')
+
+        return
+
+# -------------------------------------------------------------
     def load_dict(self):
         """
-        Reload textfields from filter dictionary
-        Transform the displayed frequency spec input fields according to the units
-        setting (i.e. f_S). Spec entries are always stored normalized w.r.t. f_S
-        in the dictionary; when f_S or the unit are changed, only the displayed values
-        of the frequency entries are updated, not the dictionary!
+        Triggered by FocusIn, FocusOut and ESC-Key in LineEdit fields and by
+        `sort_dict_freqs():
 
-        Update the displayed frequency unit
+        `load_dict()` is called during init and when the frequency unit or the
+          sampling frequency have been changed via
+          `filter_specs.update_UI()` -> `self.update_UI()` -> `self.sort_dict_freqs()`
 
-        load_dict is called during init and when the frequency unit or the
-        sampling frequency have been changed.
+        - Reload textfields from filter dictionary
+
+        - Transform the displayed frequency spec input fields according to the units
+          setting (i.e. f_S). Spec entries are always stored normalized w.r.t. f_S
+          in the dictionary; when f_S or the unit are changed, only the displayed values
+          of the frequency entries are updated, not the dictionary!
+
+        - Update the displayed frequency unit
 
         It should be called when `specs_changed` or `data_changed` is emitted
         at another place, indicating that a reload is required.
         """
-
-        # recalculate displayed freq spec values for (maybe) changed f_S
-        logger.debug("exec load_dict")
-        self.update_f_unit()
-
+        # update displayed freq spec values for (maybe) changed f_S
         for i in range(len(self.qlineedit)):
-            f_name = str(self.qlineedit[i].objectName()).split(":", 1)
-            f_label = f_name[0]
-            f_value = fb.fil[0][f_label] * fb.fil[0]['f_S']
+            self.update_f_display(self.qlineedit[i])
 
-            if not self.qlineedit[i].hasFocus():
-                # widget has no focus, round the display
-                self.qlineedit[i].setText(params['FMT'].format(f_value))  # TODO: WTF?!
+            # Print label with "f" for absolute and with "F" for normalized frequencies
+            lbl_text = self.qlabels[i].text()
+            if fb.fil[0]['freq_specs_unit'] in {'f_S', 'f_Ny'}:
+                lbl_text = re.sub(r'[fF]', 'F', lbl_text)
             else:
-                # widget has focus, show full precision
-                self.qlineedit[i].setText(str(f_value))
+                lbl_text = re.sub(r'[fF]', 'f', lbl_text)
+
+            self.qlabels[i].setText(lbl_text)
 
 # ------------------------------------------------------------------------
     def _show_entries(self, num_new_labels):
         """
+        Called by `update_UI()` when filter has changed
         - check whether subwidgets need to be shown or hidden
         - check whether enough subwidgets (QLabel und QLineEdit) exist for the
           the required number of `num_new_labels`:
@@ -345,43 +379,25 @@ class FreqSpecs(QWidget):
         - a frequency spec field has been edited
         - the sort button has been clicked (from filter_specs.py)
         """
-
+        # create list with the normalized frequency values of visible
+        # QLineEdit widgets from the filter dict
         f_specs = [fb.fil[0][str(self.qlineedit[i].objectName())]
                    for i in range(self.n_cur_labels)]
+        # sort them if required
         if fb.fil[0]['freq_specs_sort']:
             f_specs.sort()
-
-        # Make sure normalized freqs are in the range ]0, 0.5[ and are different
-        # by at least MIN_FREQ_STEP
+        # and write them back to the filter dict
         for i in range(self.n_cur_labels):
-            if f_specs[i] <= MIN_FREQ:
-                logger.warning(
-                    "Frequencies must be > 0, changed {0} from {1:.4g} to {2:.4g}."
-                    .format(str(self.qlineedit[i].objectName()),
-                            f_specs[i]*fb.fil[0]['f_S'],
-                            (MIN_FREQ + MIN_FREQ_STEP)*fb.fil[0]['f_S']))
-                f_specs[i] = MIN_FREQ + MIN_FREQ_STEP
-
-            if f_specs[i] >= MAX_FREQ:
-                logger.warning(
-                    "Frequencies must be < f_S /2, changed {0} from {1:.4g} to {2:.4g}."
-                    .format(str(self.qlineedit[i].objectName()),
-                            f_specs[i]*fb.fil[0]['f_S'],
-                            (MAX_FREQ - MIN_FREQ_STEP)*fb.fil[0]['f_S']))
-                f_specs[i] = MAX_FREQ - MIN_FREQ_STEP
-
             fb.fil[0][str(self.qlineedit[i].objectName())] = f_specs[i]
 
-        # check for (nearly) identical elements:
+        # verify that elements differ by at least MIN_FREQ_STEP by
+        # checking for (nearly) identical elements:
         _, mult = unique_roots(f_specs, tol=MIN_FREQ_STEP)
         ident = [x for x in mult if x > 1]
         if ident:
             logger.warning("Frequencies must differ by at least {0:.4g}"
                            .format(MIN_FREQ_STEP * fb.fil[0]['f_S']))
-
         self.load_dict()
-
-
 # ------------------------------------------------------------------------------
 if __name__ == '__main__':
     """ Run widget standalone with `python -m pyfda.input_widgets.freq_specs` """

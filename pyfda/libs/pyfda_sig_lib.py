@@ -9,15 +9,16 @@
 """
 Library with various signal processing related functions
 """
+import logging
+logger = logging.getLogger(__name__)
+
 import time
 import numpy as np
 from numpy import pi
 import scipy.signal as sig
 
+import pyfda.libs.pyfda_lib as pyfda_lib
 import pyfda.filterbroker as fb
-
-import logging
-logger = logging.getLogger(__name__)
 
 
 def impz(b, a=1, FS=1, N=0, step=False):
@@ -94,9 +95,86 @@ Examples
         hn = np.cumsum(hn)
 
     return hn, td
+# --------------------------------------------------------------------------
+def zeros_with_val(N: int, val: float = 1., pos: int = 0):
+    """
+    Create a 1D array of `N` zeros where the element at position `pos` has the
+    value `val`.
 
+    Parameters
+    ----------
+
+    N: int
+        number of elements
+    val: scalar
+        value to be inserted at position `pos` (default: 1)
+    pos: int
+        Position of `val` to be inserted (default: 0)
+
+    Returns
+    -------
+    arr: np.ndarray
+       Array with zeros except for element at position `pos`
+    """
+    if pos >= N or -pos > N:
+        raise(IndexError)
+
+    a = np.zeros(N, dtype=type(val))
+    a[pos] = val
+    return a
 
 # ------------------------------------------------------------------------------
+def zpk2array(zpk):
+    """
+    Test whether Z = zpk[0] and P = zpk[1] have the same length, if not, equalize
+    the lengths by adding zeros.
+
+    Test whether gain = zpk[2] is a scalar or a vector
+    and whether it (or the first element of the vector) is != 0. If the gain is 0,
+    set gain = 1.
+
+    Finally, convert the gain into an vector with the same length as P and Z and
+    return the the three vectors as one array.
+
+    Parameters
+    ----------
+    zpk :  list, tuple or ndarray
+        Zeros, poles and gain of the system
+
+    Returns
+    -----
+    zpk as an array or an error string
+    """
+    try:
+        _ = len(zpk)
+    except TypeError:
+        return f"zpk is a scalar or 'None'!"
+
+    if type(zpk) in {np.ndarray, list, tuple}:
+        if len(zpk) == 3:  # dimensions are ok, but poles / gain could be empty
+            if np.isscalar(zpk[2]) or zpk[2] == []:
+                if zpk[2] == 0:
+                    zpk[2] = 1
+            else:
+                # logger.error(zpk[2])
+                if zpk[2][0] in {0, None}:
+                    zpk[2][0] = 1
+
+        elif len(zpk) == 2:  # only poles and zeros given:
+            zpk = list(zpk)
+            zpk.append([1])  # set gain = 1
+        elif len(zpk) == 1:  # only zeros given:
+            zpk = list(zpk)
+            zpk.append([0], [1])  # set pole = 0, gain = 1
+        else:
+            logger.error(f"'zpk' has unsuitable shape '{np.shape(zpk)}'")
+            return f"'zpk' has unsuitable shape '{np.shape(zpk)}'"
+    else:
+        return f"'zpk' has an unsuitable type '{type(zpk)}'"
+
+    return pyfda_lib.iter2ndarray(zpk)
+
+# ------------------- -----------------------------------------------------------
 def angle_zero(X, n_eps=1e3, mode='auto', wrapped='auto'):
 
     """
@@ -110,10 +188,11 @@ def angle_zero(X, n_eps=1e3, mode='auto', wrapped='auto'):
 
 
 # ------------------------------------------------------------------------------
-def div_safe(num, den, n_eps=1, i_scale=1, verbose=False):
+def div_safe(num, den, n_eps: float = 1., i_scale: float = 1., verbose: bool = False):
 
     """
     Perform elementwise array division after treating singularities, meaning:
+
     - check whether denominator (`den`) coefficients approach zero
     - check whether numerator (`num`) or denominator coefficients are non-finite, i.e.
       one of `nan`, `ìnf` or `ninf`.
@@ -125,6 +204,7 @@ def div_safe(num, den, n_eps=1, i_scale=1, verbose=False):
     ----------
     num : array_like
         numerator coefficients
+
     den : array_like
         denominator coefficients
 
@@ -306,7 +386,7 @@ delay.
 
 An efficient form of calculating the group delay of FIR filters based on the
 derivative of the logarithmic frequency response has been described in [JOS]_
-and [Lyons]_ for discrete time systems.
+and [Lyons08]_ for discrete time systems.
 
 A FIR filter is defined via its polyome :math:`H(z) = \\sum_k b_k z^{-k}` and has
 the following derivative:
@@ -415,20 +495,20 @@ the ramped polynome has to be calculated differently).
 J.O. Smith gives the following speed and accuracy optimizations for the basic
 algorithm:
 
-    * convert the filter to a FIR filter with identical phase and group delay
+    - convert the filter to a FIR filter with identical phase and group delay
       (but with different magnitude response)
 
-    * use FFT instead of polyval to calculate the frequency response
+    - use FFT instead of polyval to calculate the frequency response
 
 The group delay of an IIR filter :math:`H(z) = B(z)/A(z)` can also
 be calculated from an equivalent FIR filter :math:`C(z)` with the same phase
 response (and hence group delay) as the original filter. This filter is obtained
 by the following steps:
 
-* The zeros of :math:`A(z)` are the poles of :math:`1/A(z)`, its phase response is
+- The zeros of :math:`A(z)` are the poles of :math:`1/A(z)`, its phase response is
   :math:`\\angle A(z) = - \\angle 1/A(z)`.
 
-* Transforming :math:`z \\rightarrow 1/z` mirrors the zeros at the unit circle,
+- Transforming :math:`z \\rightarrow 1/z` mirrors the zeros at the unit circle,
   correcting the negative phase response. This can be performed numerically by "flipping"
   the order of the coefficients and multiplying by :math:`z^{-N}` where :math:`N`
   is the order of :math:`A(z)`. This operation also conjugates the coefficients (?)
@@ -440,7 +520,7 @@ by the following steps:
   the conjugate operation is omitted which gives wrong results for complex
   coefficients.
 
-* Finally, :math:`C(z) = B(z) \\tilde{A}(z)`:
+- Finally, :math:`C(z) = B(z) \\tilde{A}(z)`:
 
 .. math::
 
@@ -474,7 +554,7 @@ seems to be numerically less robust than using the FFT for the same task, it
 is also much slower.
 
 This measure fixes already most of the problems described for narrowband IIR
-filters in scipy issues [SC9310]_ and [SC1175]_. In my experience, these problems
+filters in scipy issues [Scipy_9310]_ and [Scipy_1175]_. In my experience, these problems
 occur for all narrowband IIR response types.
 
 **Shpak algorithm for IIR filters**
@@ -483,30 +563,11 @@ The algorithm described above is numerically efficient but not robust for
 narrowband IIR filters. Especially for filters defined by second-order sections,
 it is recommended to calculate the group delay using the D. J. Shpak's algorithm.
 
-Code is available at [ENDO5828333]_ (GPL licensed) or at [SPA]_ (MIT licensed).
+Code is available at [Endolith_5828333]_ (GPL licensed) or at [SPA]_ (MIT licensed).
 
 This algorithm sums the group delays of the individual sections which is much
 more robust as only second-order functions are involved. However, converting `(b,a)`
 coefficients to SOS coefficients introduces inaccuracies.
-
-References
-```````````
-
-.. [JOS] https://ccrma.stanford.edu/%7Ejos/fp/Numerical_Computation_Group_Delay.html or
-
-         https://www.dsprelated.com/freebooks/filters/Numerical_Computation_Group_Delay.html
-
-.. [Lyons] https://www.dsprelated.com/showarticle/69.php
-
-.. [SC1175] https://github.com/scipy/scipy/issues/1175
-
-.. [SC9310] https://github.com/scipy/scipy/issues/9310
-
-.. [SPA] https://github.com/spatialaudio/group-delay-of-filters
-
-.. [ENDO5828333] https://gist.github.com/endolith/5828333
-
-.. [OCTAVE] https://sourceforge.net/p/octave/mailman/message/9298101/
 
 Examples
 --------

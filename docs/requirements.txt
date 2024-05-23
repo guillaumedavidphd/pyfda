@@ -1,0 +1,8 @@
+myst_parser
+sphinx-mdinclude
+numpy
+scipy
+PyQt5
+numexpr
+matplotlib
+markdown

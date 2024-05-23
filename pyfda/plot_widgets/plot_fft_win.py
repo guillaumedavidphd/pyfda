@@ -77,9 +77,9 @@ class Plot_FFT_win(QDialog):
     sig_tx = pyqtSignal(object)  # outgoing
     from pyfda.libs.pyfda_qt_lib import emit
 
-    def __init__(self, parent, win_dict, sym=False,
+    def __init__(self, win_dict, sym=False,
                  title='pyFDA Window Viewer', ignore_close_event=True):
-        super(Plot_FFT_win, self).__init__(parent)
+        super().__init__()
         # make window stay on top
         qwindow_stay_on_top(self, True)
 
@@ -117,7 +117,7 @@ class Plot_FFT_win(QDialog):
         """
         if self.ignore_close_event:
             event.ignore()
-            self.emit({'closeEvent': ''})
+            self.emit({'close_event': ''})
 
 # ------------------------------------------------------------------------------
     def process_sig_rx(self, dict_sig=None):
@@ -160,7 +160,7 @@ class Plot_FFT_win(QDialog):
         self.bfont = QFont()
         self.bfont.setBold(True)
 
-        self.qfft_win_select = QFFTWinSelector(self, self.win_dict)
+        self.qfft_win_select = QFFTWinSelector(self.win_dict, objectName='plot_fft_win_qfft')
 
         self.lbl_N = QLabel(to_html("N =", frmt='bi'))
         self.led_N = QLineEdit(self)
@@ -170,10 +170,10 @@ class Plot_FFT_win(QDialog):
             "<span>Number of window data points to display.</span>")
 
         # By default, the enter key triggers the default 'dialog action' in QDialog
-        # widgets. This activates one of the pushbuttons.
-        self.but_log_t = QPushButton("dB", default=False, autoDefault=False)
+        # widgets. This would activate one of the pushbuttons if `default` wasn't False.
+        self.but_log_t = QPushButton("dB", default=False, autoDefault=False,
+                                     objectName="chk_log_time")
         self.but_log_t.setMaximumWidth(qtext_width(" dB "))
-        self.but_log_t.setObjectName("chk_log_time")
         self.but_log_t.setCheckable(True)
         self.but_log_t.setChecked(False)
         self.but_log_t.setToolTip("Display in dB")
@@ -204,9 +204,9 @@ class Plot_FFT_win(QDialog):
 
         # By default, the enter key triggers the default 'dialog action' in QDialog
         # widgets. This activates one of the pushbuttons.
-        self.but_log_f = QPushButton("dB", default=False, autoDefault=False)
+        self.but_log_f = QPushButton("dB", default=False, autoDefault=False,
+                                     objectName="chk_log_freq")
         self.but_log_f.setMaximumWidth(qtext_width(" dB "))
-        self.but_log_f.setObjectName("chk_log_freq")
         self.but_log_f.setToolTip("<span>Display in dB.</span>")
         self.but_log_f.setCheckable(True)
         self.but_log_f.setChecked(True)
@@ -230,8 +230,7 @@ class Plot_FFT_win(QDialog):
         layH_win_select.addWidget(self.qfft_win_select)
         layH_win_select.setContentsMargins(0, 0, 0, 0)
         layH_win_select.addStretch(1)
-        frmQFFT = QFrame(self)
-        frmQFFT.setObjectName("frmQFFT")
+        frmQFFT = QFrame(self, objectName="frmQFFT")
         frmQFFT.setLayout(layH_win_select)
 
         hline = QHLine()
@@ -259,8 +258,7 @@ class Plot_FFT_win(QDialog):
         layVControls.addWidget(hline)
         layVControls.addLayout(layHControls)
 
-        frmControls = QFrame(self)
-        frmControls.setObjectName("frmControls")
+        frmControls = QFrame(self, objectName="frmControls")
         frmControls.setLayout(layVControls)
 
         # ----------------------------------------------------------------------
@@ -307,8 +305,7 @@ class Plot_FFT_win(QDialog):
         layVInfo.addWidget(self.tbl_win_props)
         layVInfo.addWidget(self.txtInfoBox)
 
-        frmInfo = QFrame(self)
-        frmInfo.setObjectName("frmInfo")
+        frmInfo = QFrame(self, objectName="frmInfo")
         frmInfo.setLayout(layVInfo)
 
         # ----------------------------------------------------------------------
@@ -668,17 +665,18 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     app.setStyleSheet(rc.qss_rc)
     fb.clipboard = QApplication.clipboard()  # create clipboard instance
-    win_names_list = ["Boxcar", "Rectangular", "Barthann", "Bartlett", "Blackman",
-                      "Blackmanharris", "Bohman", "Cosine", "Dolph-Chebyshev",
-                      "Flattop", "General Gaussian", "Gauss", "Hamming", "Hann",
-                      "Kaiser", "Nuttall", "Parzen", "Slepian", "Triangular", "Tukey"]
+    # win_names_list = ["Boxcar", "Rectangular", "Barthann", "Bartlett", "Blackman",
+    #                   "Blackmanharris", "Bohman", "Cosine", "Dolph-Chebyshev", "DPSS",
+    #                   "Flattop", "General Gaussian", "Gauss", "Hamming", "Hann",
+    #                   "Kaiser", "Nuttall", "Parzen", "Triangular", "Tukey"]
+    win_names_list = []
 
     # initialize windows dict with the list above and an initial window
     win_dict = get_windows_dict(
         win_names_list=win_names_list,
         cur_win_name="Hann")
 
-    mainw = Plot_FFT_win(None, win_dict, ignore_close_event=False)
+    mainw = Plot_FFT_win(win_dict, ignore_close_event=False)
 
     app.setActiveWindow(mainw)
     mainw.show()

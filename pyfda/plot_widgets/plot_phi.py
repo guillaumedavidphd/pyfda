@@ -63,7 +63,7 @@ class Plot_Phi(QWidget):
                 self.update_view()
                 self.needs_draw = False
             elif 'mpl_toolbar' in dict_sig and dict_sig['mpl_toolbar'] == 'ui_level':
-                self.frmControls.setVisible(dict_sig['value'] == 0)
+                self.frmControls.setVisible(self.mplwidget.mplToolbar.a_ui_level == 0)
 
         else:
             if 'data_changed' in dict_sig:
@@ -79,12 +79,11 @@ class Plot_Phi(QWidget):
         - Frame with control elements
         """
 
-        self.cmbUnitsPhi = QComboBox(self)
+        self.cmbUnitsPhi = QComboBox(self, objectName="cmbUnitsA")
         units = ["rad", "rad/pi",  "deg"]
         scales = [1.,   1. / np.pi, 180./np.pi]
         for unit, scale in zip(units, scales):
             self.cmbUnitsPhi.addItem(unit, scale)
-        self.cmbUnitsPhi.setObjectName("cmbUnitsA")
         self.cmbUnitsPhi.setToolTip("Set unit for phase.")
         self.cmbUnitsPhi.setCurrentIndex(0)
         self.cmbUnitsPhi.setSizeAdjustPolicy(QComboBox.AdjustToContents)
@@ -102,8 +101,7 @@ class Plot_Phi(QWidget):
         #
         # This widget encompasses all control subwidgets
         # ----------------------------------------------------------------------
-        self.frmControls = QFrame(self)
-        self.frmControls.setObjectName("frmControls")
+        self.frmControls = QFrame(self, objectName="frmControls")
         self.frmControls.setLayout(layHControls)
 
         # ----------------------------------------------------------------------

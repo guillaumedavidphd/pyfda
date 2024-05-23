@@ -3,22 +3,17 @@
 Main Routines
 =============
 
-:mod:`pyfda.pyfda_dirs`
------------------------
-.. automodule:: pyfda.pyfda_dirs
+:mod:`pyfda.libs.pyfda_dirs`
+----------------------------
+.. automodule:: pyfda.libs.pyfda_dirs
     :members:
     
    
-:mod:`pyfda.tree_builder`
--------------------------
+:mod:`pyfda.libs.tree_builder`
+------------------------------
 
-.. automodule:: pyfda.tree_builder
+.. automodule:: pyfda.libs.tree_builder
    :members: 
-
-:mod:`pyfda.pyfda_lib`
-----------------------
-.. automodule:: pyfda.pyfda_lib
-    :members:
     
 
 :mod:`pyfda.filter_factory`
@@ -32,8 +27,3 @@ Main Routines
 .. automodule:: pyfda.filterbroker
    :members: 
 
-:mod:`pyfda.pyfda_io_lib`
--------------------------
-
-.. automodule:: pyfda.pyfda_io_lib
-    :members:

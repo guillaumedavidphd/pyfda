@@ -19,12 +19,24 @@ from .pyfda_dirs import OS, OS_VER
 import logging
 logger = logging.getLogger(__name__)
 
-
+DICT_SIG_KEYS = {'id', 'class', 'ttl', 'sender_name', 'object_name',
+                 'view_changed',   # view on the data (e.g. f_S) has changed
+                 'specs_changed',  # filter specs (corner freqs. etc.) have changed
+                 'data_changed',   # actual filter data (coeffs. etc.) has changed
+                 'filt_changed',   # the filter type (e.g. elliptic) has changed
+                 'ui_local_changed',  # some parameter in the local ui has changed
+                 'ui_global_changed', # this relates to resize, tab change or CSV options
+                 'fx_sim',         # parameters relating to fixpoint simulation
+                 'fxfilter_func',  # handle to filter function
+                 'close_event',    # propagate close event to finish some task upstream
+                 'mpl_toolbar'     # events triggered by the toolbar
+                }
 # ------------------------------------------------------------------------------
 def emit(self, dict_sig: dict = {}, sig_name: str = 'sig_tx') -> None:
     """
     Emit a signal `self.<sig_name>` (defined as a class attribute) with a
     dict `dict_sig` using Qt's `emit()`.
+
     - Add the keys `'id'` and `'class'` with id resp. class name of the calling
       instance if not contained in the dict
     - If key 'ttl' is in the dict and its value is less than one, terminate the
@@ -32,6 +44,14 @@ def emit(self, dict_sig: dict = {}, sig_name: str = 'sig_tx') -> None:
     - If the sender has passed an objectName, add it with the key "sender_name"
       to the dict.
     """
+
+    for k in dict_sig:
+        if k not in DICT_SIG_KEYS:
+            logger.warning(f"Unknown entry '{k}':'{dict_sig[k]}' in 'dict_sig'!")
+            logger.warning(pprint_log(dict_sig))
+    # if self.sender() and self.sender().objectName():
+    #     logger.info(f"this_sender_name: {self.sender().objectName()}")
+    # logger.info(f"objectName = {self.objectName()}")
     if 'id' not in dict_sig:
         dict_sig.update({'id': id(self)})
     if 'class' not in dict_sig:
@@ -39,11 +59,20 @@ def emit(self, dict_sig: dict = {}, sig_name: str = 'sig_tx') -> None:
     # Count down time-to-live counter and terminate the signal when ttl < 1
     if 'ttl' in dict_sig:
         if dict_sig['ttl'] < 1:
+            logger.warning("Terminated with ttl = 0")
             return
         else:
             dict_sig.update({'ttl': dict_sig['ttl'] - 1})
-    if self.sender() and self.sender().objectName():
+    else:
+        dict_sig.update({'ttl': 50})
+    if 'sender_name' not in dict_sig and\
+        self.sender() and self.sender().objectName():
         dict_sig.update({'sender_name': self.sender().objectName()})
+    if 'object_name' not in dict_sig:
+        dict_sig.update({'object_name': self.objectName()})
+
+    # logger.info(f"EMIT:{pprint_log(dict_sig)}")
+
     # Get signal (default name: `sig_tx`) from calling instance and emit it
     signal = getattr(self, sig_name)
     signal.emit(dict_sig)
@@ -99,7 +128,7 @@ def qwindow_stay_on_top(win: QDialog, top: bool) -> None:
 
 
 # ------------------------------------------------------------------------------
-def qcmb_box_populate(cmb_box: QComboBox, items_list: list, item_init: str) -> None:
+def qcmb_box_populate(cmb_box: QComboBox, items_list: list, item_init: str) -> int:
     """
     Clear and populate combo box `cmb_box` with text, data and tooltip from the list
     `items_list` with initial selection of `init_item` (data).
@@ -114,17 +143,21 @@ def qcmb_box_populate(cmb_box: QComboBox, items_list: list, item_init: str) -> N
 
     items_list: list
         List of combobox entries, in the format
-        [ "Tooltip for Combobox", # [optional]
-         ("data 1st item", "text 1st item", "tooltip for 1st item" # [optional]),
-         ("data 2nd item", "text 2nd item", "tooltip for 2nd item")]
+        ["Tooltip for Combobox",
+        ("data 1st item", "text 1st item", "tooltip for 1st item"),
+        ("data 2nd item", "text 2nd item", "tooltip for 2nd item")]
+
+        Tooltipps are optional.
 
     item_init: str
-        data for initial positition of combobox. When data is not found,
+        data for initial setting of combobox. When data is not found,
         set combobox to first item.
 
     Returns
     -------
-    None
+
+    ret: int
+        Index of `item_init` in combobox. If index == -1, `item_init` was not in `items_list`
     """
     cmb_box.clear()
     if type(items_list[0]) is str:  # combo box tool tipp (optional)
@@ -137,7 +170,9 @@ def qcmb_box_populate(cmb_box: QComboBox, items_list: list, item_init: str) -> N
             cmb_box.addItem(cmb_box.tr(items_list[i][1]), items_list[i][0])
         if len(items_list[i]) == 3:  # add item tool tip (optional)
             cmb_box.setItemData(i-1, cmb_box.tr(items_list[i][2]), Qt.ToolTipRole)
-    qset_cmb_box(cmb_box, item_init, data=True)
+    ret = qset_cmb_box(cmb_box, item_init, data=True)
+
+    return ret
 
     """ icon = QIcon('logo.png')
     # adding icon to the given index
@@ -389,24 +424,24 @@ def qstyle_widget(widget, state):
     This requires setting the property, "unpolishing" and "polishing" the widget
     and finally forcing an update.
 
-    - "normal": default, no color styling
-    - "ok":  green, filter has been designed, everything ok
-    - "changed": yellow, filter specs have been changed
-    - "running": orange, simulation is running
-    - "error" : red, an error has occurred during filter design
-    - "failed" : pink, filter fails to meet target specs (not used yet)
-    - "u" or "unused": grey text color
-    - "d" or "disabled": background color darkgrey
-    - "a" or "active": no special style defined
+    - 'normal' : default, no color styling
+    - 'ok':  green, filter has been designed, everything ok
+    - 'changed': yellow, filter specs have been changed
+    - 'running': orange, simulation is running
+    - 'error'  : red, an error has occurred during filter design
+    - 'failed' : pink, filter fails to meet target specs (not used yet)
+    - 'u' or 'unused'  : grey text color
+    - 'd' or 'disabled': background color darkgrey
+    - 'a' or 'active'  : no special style defined
     """
     state = str(state)
     if state == 'u':
-        state = "unused"
+        state = 'unused'
         # *[state="unused"], *[state="u"]{background-color:white; color:darkgrey}
     elif state == 'a':
-        state = "active"
+        state = 'active'
     elif state == 'd':
-        state = "disabled"
+        state = 'disabled'
         # QLineEdit:disabled{background-color:darkgrey;}
     # widget.setAttribute(Qt.WA_StyledBackground, True)
     widget.setProperty("state", state)
@@ -458,17 +493,20 @@ def qget_selected(table, select_all=False, reverse=True):
 
 
 # ----------------------------------------------------------------------------
-def qfilter_warning(self, N, fil_class):
+def popup_warning(self, param1: int = 0, param2: str = "", message: str = "") -> bool:
     """
-    Pop-up a warning box for very large filter orders
+    Pop-up a warning box and require a user prompt. When `message == ""`, warn of
+    very large filter orders, otherwise display the passed message
     """
+    if message == "":
+        message = (
+            f"<span><b><i>N</i> = {param1}</b> is a rather high order for<br />"
+            f"{param2} filters and may cause large <br />"
+            "numerical errors and compute times.<br />Continue?</span>")
+
     reply = QMessageBox.warning(
-        self, 'Warning',
-        ("<span><i><b>N = {0}</b></i> &nbsp; is a rather high order for<br />"
-         "an {1} filter and may cause large <br />"
-         "numerical errors and compute times.<br />"
-         "Continue?</span>".format(N, fil_class)),
-        QMessageBox.Yes, QMessageBox.No)
+        self, 'Warning', message, QMessageBox.Yes, QMessageBox.No)
+
     if reply == QMessageBox.Yes:
         return True
     else:
@@ -523,7 +561,8 @@ def qtext_width(text: str = '', N_x: int = 17, bold: bool = True, font=None) -> 
 
     document = QtGui.QTextDocument(text)
     document.setDefaultFont(font)
-    width = int(document.idealWidth())
+    # width = int(document.idealWidth())
+    width = int(document.size().width())
 
     return width
 
@@ -616,8 +655,9 @@ class QHLine(QFrame):
     """
     Create a thin horizontal line utilizing the HLine property of QFrames
     Usage:
-        myline = QHLine()
-        mylayout.addWidget(myline)
+
+    > myline = QHLine()
+    > mylayout.addWidget(myline)
     """
     def __init__(self, width=1):
         super(QHLine, self).__init__()
@@ -627,6 +667,14 @@ class QHLine(QFrame):
 
 
 class QVLine(QFrame):
+    """
+    Create a thin vertical line utilizing the HLine property of QFrames
+    Usage:
+
+    > myline = QVLine()
+    > mylayout.addWidget(myline)
+    """
+
     def __init__(self, width=2):
         super(QVLine, self).__init__()
         self.setFrameShape(QFrame.VLine)
@@ -663,9 +711,10 @@ class PushButton(QPushButton):
         Whether initial state is checked
     """
     def __init__(self, txt: str = "", icon: QIcon = None, N_x: int = 8,
-                 checkable: bool = True, checked: bool = False):
+                 checkable: bool = True, checked: bool = False, objectName=""):
         super(PushButton, self).__init__()
 
+        self.setObjectName(objectName)
         self.setCheckable(checkable)
         self.setChecked(checked)
         if icon is None:

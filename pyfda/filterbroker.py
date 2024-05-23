@@ -36,6 +36,11 @@ More info on data persistence and storing / accessing global variables:
 * http://stackoverflow.com/questions/2447353/getattr-on-a-module
 
 """
+import logging
+logger = logging.getLogger(__name__)
+
+import copy
+import time
 from collections import OrderedDict
 from pyfda.libs.frozendict import freeze_hierarchical
 
@@ -44,8 +49,12 @@ clipboard = None
 
 base_dir = ""  #: Project base directory
 
-# State of filter design: "ok", "changed", "error", "failed", "active"
-design_filt_state = "changed"
+# State of filter design: 'ok', 'changed', 'error', 'failed', 'active'
+design_filt_state = 'changed'
+
+UNDO_LEN = 10  # depth of circular undo buffer
+undo_step = 0  # number of undo steps, limited to UNDO_LEN
+undo_ptr = 0  # pointer to current undo memory % UNDO_LEN
 
 #==============================================================================
 # -----------------------------------------------------------------------------
@@ -92,7 +101,6 @@ filter_classes = OrderedDict(
      ('Manual_FIR', {'name': 'Manual', 'mod': 'pyfda.filter_widgets.manual'}),
      ('Manual_IIR', {'name': 'Manual', 'mod': 'pyfda.filter_widgets.manual'})
      ])
-
 """
 The keys of this dictionary are the names of all found filter classes, the values
 are the name to be displayed e.g. in the comboboxes and the fully qualified
@@ -100,7 +108,8 @@ name of the module containing the class.
 """
 
 # Dictionary describing the available combinations of response types (rt),
-# filter types (ft), design methods (dm) and filter order (fo):
+# filter types (ft), design methods (dm) and filter order (fo). This dictionary
+# is also overwritten during initialization:
 fil_tree = freeze_hierarchical({
     'LP': {
         'FIR': {
@@ -219,97 +228,161 @@ fil_tree = freeze_hierarchical({
 
 # -----------------------------------------------------------------------------
 # Dictionary containing current filter type, specifications, design and some
-# auxiliary information, the initial definition here is overwritten by
-# input widgets and design routines:
+# auxiliary information, the initial definition here is copied into fil[0] ... [9]
+# which can be modified by input widgets and design routines
 # ------------------------------------------------------------------------------
-fil_init = {'rt': 'LP', 'ft': 'IIR', 'fc': 'Cheby1', 'fo': 'man',  # filter type
-            'N': 10,  # filter order
-            'f_S': 1, 'T_S': 1,  # current sampling frequency and period
-            'f_S_wav': 16000,  # sampling frequency for wav files
-            'f_S_prev': 1,  # previous sampling frequency
-            'freq_locked': False,  # don't update absolute frequencies when f_S is changed
-            'f_S_scale': 1,  #
-            'f_max': 1,
-            'freqSpecsRangeType': 'Half',
-            'freqSpecsRange': [0, 0.5],
-            'freq_specs_sort': True,  # sort freq. specs in ascending order
-            'freq_specs_unit': 'f_S',
-            'plt_fLabel': r'$F = 2f \, / \, f_S = \Omega \, / \, \mathrm{\pi} \; \rightarrow$',
-            'plt_fUnit': 'f_S',
-            'plt_tLabel': r'$n \; \rightarrow$',
-            'plt_tUnit': 's',
-            'A_PB': 0.02, 'A_PB2': 0.01, 'F_PB': 0.1, 'F_PB2': 0.4, 'F_C': 0.2, 'F_N': 0.2,
-            'A_SB': 0.001, 'A_SB2': 0.0001, 'F_SB': 0.2, 'F_SB2': 0.3, 'F_C2': 0.4, 'F_N2': 0.4,
-            'W_PB': 1, 'W_PB2': 1, 'W_SB': 1, 'W_SB2': 1,
-            #
-            'ba': ([1, 1, 1], [1, 0.1, 0.5]),  # (bb, aa) tuple coefficient lists
-            # causal zeros/poles/gain
-            'zpk': ([-0.5 + 3**0.5/2.j, -0.5 - 3**0.5/2.j],
-                   [(2./3)**0.5 * 1j, -(2./3)**0.5 * 1j], 1),
-            #
-            'sos': [],
-            # input, output, accu, coeffs, ... fixpoint word formats and quantizer
-            # settings:
-            'fxqc':
-                {'QI': {'WI': 0, 'WF': 15, 'W': 16, 'ovfl': 'sat',  'quant': 'round'},
-                 'QO': {'WI': 0, 'WF': 15, 'W': 16, 'ovfl': 'wrap', 'quant': 'floor'},
-                 'QACC': {'WI': 0, 'WF': 31, 'W': 32, 'ovfl': 'wrap', 'quant': 'floor'},
-                 'QCB': {'WI': 0, 'WF': 15, 'W': 16, 'ovfl': 'wrap', 'quant': 'floor',
-                         'scale': 1, 'fx_base': 'float'},
-                 'QCA': {'WI': 2, 'WF': 13, 'W': 16, 'ovfl': 'wrap', 'quant': 'floor',
-                         'scale': 1, 'fx_base': 'float'}
-                },
-                # 'b': [32768, 32768, 32768],
-                # 'a': [65536, 6553, 0]
-                # },
-            'fx_sim': False,  # fixpoint simulation mode 
-            'creator': ('ba', 'filterbroker'),  #(format ['ba', 'zpk', 'sos'], routine)
-            'amp_specs_unit': 'dB',
+fil_ref = {
+    '_id': [], # a list with the keyword 'pyfda' and the version, e.g. ['pyfda', 1]
+    'info': 'Initial filter design',
+    'rt': 'LP', 'ft': 'IIR', 'fc': 'Cheby1', 'fo': 'man',  # filter type
+    'N': 10,  # filter order
+    'f_S': 1, 'T_S': 1,  # current sampling frequency and period
+    # 'f_s_wav': 16000,  # sampling frequency for wav files
+    'f_S_prev': 1,  # previous sampling frequency
+    'freq_locked': False,  # don't update absolute frequencies when f_S is changed
+    'f_s_scale': 1,  #
+    'f_max': 1,
+    'freqSpecsRangeType': 'Half',
+    'freqSpecsRange': [0, 0.5],
+    'freq_specs_sort': True,  # sort freq. specs in ascending order
+    'freq_specs_unit': 'f_S',
+    'plt_fLabel': r'$F = 2f \, / \, f_S = \Omega \, / \, \mathrm{\pi} \; \rightarrow$',
+    'plt_fUnit': 'f_S',
+    'plt_tLabel': r'$n \; \rightarrow$',
+    'plt_tUnit': 's',
+    'A_PB': 0.02, 'A_PB2': 0.01, 'F_PB': 0.1, 'F_PB2': 0.4, 'F_C': 0.2, 'F_N': 0.2,
+    'A_SB': 0.001, 'A_SB2': 0.0001, 'F_SB': 0.2, 'F_SB2': 0.3, 'F_C2': 0.4, 'F_N2': 0.4,
+    'W_PB': 1, 'W_PB2': 1, 'W_SB': 1, 'W_SB2': 1,
+    #
+    'ba': ([0.3, 0.3, 0.3], [1, 0, 0.66666666]),  # (bb, aa) tuple coefficient lists
+    # causal zeros/poles/gain
+    'zpk': [[-0.5 + 3**0.5/2.j, -0.5 - 3**0.5/2.j],
+            [(2./3)**0.5 * 1j, -(2./3)**0.5 * 1j],
+            [0.3, 0]],
+    #
+    'sos': [],
+    # global quantization format {'qint', 'qfrac'}
+    'qfrmt': 'qfrac',
+    # number format for fixpoint display {'dec', 'hex', 'bin', 'oct', 'csd'}
+    'fx_base': 'dec',
 
-            'plt_phiUnit': 'rad',
-            'plt_phiLabel': r'$\angle H(\mathrm{e}^{\mathrm{j} \Omega})$  in rad '\
-                    + r'$\rightarrow $',
-            'time_designed': -1,
-            'wdg_dyn': {'win': 'hann'},
-            # Parameters for spectral analysis window function
-            'win_fft':
-                {'name': 'Kaiser',  # Window name
-                 'fn_name': 'kaiser',  # function name or array with values
-                 'par': [{'name': '&beta;',
-                          'name_tex': r'$\beta$',
-                          'val': 10,
-                          'min': 0,
-                          'max': 30,
-                          'tooltip':
-                              ("<span>Shape parameter; lower values reduce main lobe width, "
-                              "higher values reduce side lobe level, typ. in the range "
-                              "5 ... 20.</span>")}],
-                 'n_par': 1,   # number of window parameters
-                 'info': "",     # Docstring for the window
-                 'win_len': 1024,
-                 },
-            # Parameters for filter design window function
-            'win_fir':
-                {'name': 'Hann',  # Window name
-                 'fn_name': 'hann',  # function name or array with values
-                 'par': [],    # set of list of window parameters
-                 'n_par': 0,   # number of window parameters
-                 'info': "",   # Docstring for the window
-                 'win_len': 1024
-                 }
-            }
+    # Settings for quantization subwidgets:
+    #   'QI':input, 'QO': output, 'QCA': coeffs a, 'QCB': coeffs b, 'QACC': accumulator
+    #    (more subwidget can be added by fixpoint widgets if needed)
+    #  Keys:
+    #   'WI': integer bits, 'WF': fractional bits,
+    #   'w_a_m': word length automatic / manual calculation (not needed for 'QI', 'QO')
+    #   'ovfl': overflow behaviour, 'quant': quantizer behaviour
+    #   'N_over': number of overflows during last quantization process
+    'fxq':{
+        # Input quantization
+        'QI': {'WI': 0, 'WF': 15, 'w_a_m': 'm',
+               'ovfl': 'sat', 'quant': 'round', 'N_over': 0},
+        # Output quantization
+        'QO': {'WI': 0, 'WF': 15, 'w_a_m': 'm',
+               'ovfl': 'wrap', 'quant': 'floor', 'N_over': 0},
+        # 'b' coefficient quantization
+        'QCB': {'WI': 0, 'WF': 15, 'w_a_m': 'a',
+                'ovfl': 'wrap', 'quant': 'floor', 'N_over': 0},
+        # 'a' coefficient quantization
+        'QCA': {'WI': 2, 'WF': 13, 'w_a_m': 'a',
+                'ovfl': 'wrap', 'quant': 'floor', 'N_over': 0},
+        # accumulator quantization
+        'QACC': {'WI': 0, 'WF': 31, 'w_a_m': 'a',
+                 'ovfl': 'wrap', 'quant': 'floor', 'N_over': 0}
+        },
+        # 'b': [32768, 32768, 32768],
+        # 'a': [65536, 6553, 0]
+        # },
+    'fx_sim': False,  # fixpoint simulation mode
+    'fx_mod_class_name': '',  # string with current fixpoint module and class
+    'creator': ('ba', 'filterbroker'),  #(format ['ba', 'zpk', 'sos'], routine)
+    'timestamp': time.time(),
+    'amp_specs_unit': 'dB',
+    'plt_phiUnit': 'rad',
+    'plt_phiLabel': r'$\angle H(\mathrm{e}^{\mathrm{j} \Omega})$  in rad '\
+            + r'$\rightarrow $',
+    # Parameters for spectral analysis window function
+    'win_fft':
+        {'name': 'Kaiser',  # Window name
+        'fn_name': 'kaiser',  # function name or array with values
+        'par': [{'name': '&beta;',
+                'name_tex': r'$\beta$',
+                'val': 10,
+                'min': 0,
+                'max': 30,
+                'tooltip':
+                    ("<span>Shape parameter; lower values reduce main lobe width, "
+                    "higher values reduce side lobe level, typ. in the range "
+                    "5 ... 20.</span>")}],
+        'n_par': 1,   # number of window parameters
+        'info': "",     # Docstring for the window
+        'win_len': 1024,
+        },
+    # dynamically instantiated filter widget
+    'wdg_fil' :
+        {'equiripple': {'grid_density': 16}},
+    # Parameters for filter design window function
+    'win_fir':
+        {'name': 'Hann',  # Window name
+            'fn_name': 'hann',  # function name or array with values
+            'par': [],    # set of list of window parameters
+            'n_par': 0,   # number of window parameters
+            'info': "",   # Docstring for the window
+            'win_len': 1024
+        }
+    }
 
-fil = [None] * 10  # create empty list with length 10 for multiple filter designs
-# This functionality is not implemented yet, currently only fil[0] is used
+  # create empty lists with length 10 for multiple filter designs and undo functions
+fil = [None] * 10
+fil_undo = [None] * 10
 
+# https://nedbatchelder.com/text/names.html :
 # define fil[0] as a dict with "built-in" default. The argument defines the default
 # factory that is called when a key is missing. Here, lambda simply returns a float.
 # When e.g. list is given as the default_factory, an empty list is returned.
 # fil[0] = defaultdict(lambda: 0.123)
 fil[0] = {}
 # Now, copy each key-value pair into the defaultdict
-for k in fil_init:
-    fil[0].update({k: fil_init[k]})
+# for k in fil_ref:
+#     fil[0].update({k: fil_ref[k]})
 
-# Define dictionary with default settings for  FiXpoint Quantization and Coefficients:
-# 'fxqc'
+# Copy fil_ref to fil[0] ... fil[9] to initialize all memories
+for l in range(len(fil)):
+    fil[l] = copy.deepcopy(fil_ref)
+
+def undo():
+    """
+    Restore current filter from undo memory `fil_undo`
+    """
+    global undo_step
+    global undo_ptr
+
+    # TODO: Limit undo memory to UNDO_LEN, implement circular buffer
+
+    # undo buffer is empty, don't copy anything
+    if undo_step < 1:
+        undo_step = 0
+        return -1
+    else:
+        fil[0] = copy.deepcopy(fil_undo[undo_ptr])
+        undo_step -= 1
+        undo_ptr = (undo_ptr + UNDO_LEN - 1) % UNDO_LEN
+
+def redo():
+    """
+    Store current filter to undo memory `fil_undo`
+    """
+    global undo_step
+    global undo_ptr
+
+    # prevent buffer overflow
+    undo_step += 1
+    if undo_step > UNDO_LEN:
+        undo_step = UNDO_LEN
+    # increase buffer pointer, allowing for circular wrap around
+    undo_ptr = (undo_ptr + 1) % UNDO_LEN
+    fil_undo[undo_ptr] = copy.deepcopy(fil[0])
+
+# Comparing nested dicts
+# https://stackoverflow.com/questions/27265939/comparing-python-dictionaries-and-nested-dictionaries

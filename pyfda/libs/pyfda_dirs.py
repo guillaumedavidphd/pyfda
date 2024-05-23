@@ -9,9 +9,9 @@
 """
 Handle directories in an OS-independent way, create logging directory etc.
 Upon import, all the variables are set.
-This is imported first by pyfdax.
+This is imported first by pyfdax, logger cannot be used yet. Hence, messages
+are printed to the console.
 """
-
 import os
 import sys
 from subprocess import check_output, CalledProcessError, STDOUT
@@ -251,7 +251,7 @@ def update_conf_files(logger):
 # is the software running in a bundled PyInstaller environment?
 PYINSTALLER = getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS')
 
-OS     = platform.system()
+OS     = platform.system()  # Windows / Linux / Darwin
 OS_VER = platform.release()
 
 CONF_FILE = 'pyfda.conf'            #: name for general configuration file
